@@ -17,6 +17,8 @@ parser.add_argument('--BN', type=bool, default=False, help='batchnorm')
 
 parser.add_argument('--VTrain', type=bool, default=False, help='if True, vali plots will be on training set, not test set')
 
+parser.add_argument('--resizeAugment', type=bool, default=True, help='if True, random resize of data')
+
 parser.add_argument('--Woff', type=int, default=0)
 parser.add_argument('--niter', type=int, default=150, help='number of epochs to train for')
 parser.add_argument('--lr', type=float, default=0.0002, help='learning rate, default=0.0002')

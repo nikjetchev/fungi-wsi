@@ -20,19 +20,29 @@ def Gridratio_(s):
     ##to call for each min max pair
     #if boring pink return true
     def pinkCriteria(ext):
-        if ext[0]>240 and ext[1]-ext[0]<7:
+        if ext[0]>240 and ext[1]-ext[0]<7:#very bright, small bandwidth
             return True
         return False
 
     for i in range(1,N0):
+        if i%20==0:
+            print ("row",i)
         for j in range(1,N1):
             patch = centerPatch(s,i*d0,j*d1)##level will be auto found by imageCrop, imageSize
             ext=patch.getextrema()
+
+            filt=False
             if ext[0][0]>254 and ext[1][0]>254 and ext[2][0]>254:#so all RGB pixels are white, min is 255
-                pass
-            if pinkCriteria(ext[0]) and pinkCriteria(ext[1]) and pinkCriteria(ext[2]): ##check if constant values, also boring case
-                pass
-            else:#so some pixels with non-white value
+                filt=True
+            elif pinkCriteria(ext[0]) and pinkCriteria(ext[1]) and pinkCriteria(ext[2]): ##check if constant values, also boring case
+                filt=True
+            else:               #so potentially good, non-boring by other 2 conditions
+                #more expensive filter
+                stat = ImageStat.Stat(patch)
+                r, g, b,alpha = stat.mean
+                if r > 235 and g > 235 and b > 235:
+                    filt=True # possible case: few tissue pixels, no tissue overall
+            if not filt:#so some pixels with non-white value
                 nonwhite.add((i*d0,j*d1))
                 if len(nonwhite)%5==1:
                     print(ext, " i ",i,"found",len(nonwhite))

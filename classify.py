@@ -25,14 +25,22 @@ savePath = "results/"
 wh = opt.imageSize  # #resizes and eventually downsamples the cropped image slice, which should be larger usually
 # transforms.RandomCrop(wh),
 # transforms.Resize(size=wh, interpolation=2)
-##TODO random mirror H and W
+#DONE augment with random mirror H and W
+#augment with random rotate
+rbuf=[]
+if opt.resizeAugment:
+    rbuf +=[transforms.RandomRotation(180, resample=False, expand=False)]
+    rbuf +=[transforms.CenterCrop(wh)]
+
 tbuf = [transforms.Resize(size=wh, interpolation=2),transforms.RandomVerticalFlip(),transforms.RandomHorizontalFlip(), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5))]
-transform = transforms.Compose(tbuf)
+transform = transforms.Compose(rbuf+tbuf)
 dataset = NailDataset(transform=transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize, shuffle=True, num_workers=opt.workers, drop_last=False)  # #simpler to drop in training?
+print ("data augment train set",rbuf+tbuf)
 
 tbuf = [transforms.Resize(size=wh, interpolation=2),transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5))]
 transform = transforms.Compose(tbuf)
+print ("data augment test set",tbuf)
 tdataset = NailDataset(transform=transform, train=False)#for test no random augmenting
 tdataloader = torch.utils.data.DataLoader(tdataset, batch_size=opt.batchSize, shuffle=True, num_workers=opt.workers)  # o drop here -- but random patch samplign anyway
 
@@ -330,6 +338,10 @@ if __name__ == '__main__':
             im, lab = data
             # print (im[:, 3].mean(), im[:, 3].min(), im[:, 3].max())
             im = im[:, :3].to(device)  # trim alpha channel
+
+            if i==0 and it ==0:
+                vutils.save_image(im*0.5+0.5, "%s/debugRotate.png" % (savePath),
+                              normalize=False)
             lab = lab.to(device).float()  # not long but float...
 
             opti.zero_grad()
@@ -347,7 +359,7 @@ if __name__ == '__main__':
                     bufP.append(pred[j])
 
             if i%5==0:
-                print ("step i",i)
+                print ("step i",i,"err",np.array(buf)[-5:].mean())
 
             win = 50
             if i == 0 and len(buf) >3 and len(bufTest)>1:
@@ -389,7 +401,10 @@ if __name__ == '__main__':
             print ("SGD time", time.time() - t0)
             t0 = time.time()#to measure hust iter
 
+        print ("eval with net.eval()")
+        netD.eval()
         bufTest.append(valiScore())
+        netD.train()
 
         if it % 20 == 1:# and it >4:
             if it % 40 == 1:

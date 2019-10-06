@@ -145,9 +145,9 @@ def getUp(s, dat, count=1,name=None):
         print ("slow data", time.time() - t0)
     return a
 
-delta=1024
+cacheRes=1024#cache was saved at this resolution
 try:
-    archive=pickle.load(open("cache%d.dat" % (delta), 'rb'))
+    archive=pickle.load(open("cache%d.dat" % (cacheRes), 'rb'))
     print ("got archive",len(archive))
     print (archive.keys())
 except Exception as e:
@@ -156,7 +156,7 @@ except Exception as e:
 def checkCache(name, x, y):
     nonwhite=archive[name]
     #print (nonwhite,"check",x-x%delta,y-y%delta)
-    if (x-x%delta,y-y%delta) in nonwhite:
+    if (x-x%cacheRes,y-y%cacheRes) in nonwhite:
         return True
     return False
 
@@ -249,11 +249,13 @@ def centerPatch(s, x, y, wh=wh, level=int(np.log2(opt.imageCrop/opt.imageSize)))
         x=x-x%2**level
         y = y - y % 2 ** level
         #print ("center patch level",(wh//2**level, wh//2**level),level,x,y)
+    if opt.resizeAugment:
+        wh*=2#allow to keep center ok, the random translate is smaller anyway
     img = s.read_region((x - wh // 2, y - wh // 2), level, (wh//2**level, wh//2**level))
     return img  # #square image size s
 
 # #for sequential sliding approach given slide s
-class SNailDataset(Dataset):
+class SingleNailDataset(Dataset):
     def __init__(self, s, count, transform=None):
         self.data = range(count)
         self.transform = transform
@@ -375,7 +377,7 @@ class NailDataset(Dataset):
                 xy = randDot(s.dimensions)
                 if partialN in archive:#faster way to get this info
                     good = checkCache(partialN, xy[0], xy[1])
-                    if good or random.randrange(2000)==0:#either nonwhite, or a random chance to give back anyway
+                    if good or random.randrange(5000)==0:#either nonwhite, or a random chance to give back anyway
                         img = centerPatch(s, xy[0], xy[1])
                         break
                 else:#long way, manual check
