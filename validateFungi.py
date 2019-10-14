@@ -4,8 +4,9 @@ Created on Jul 14, 2019
 @author: nikolay
 '''
 
-from patchSampler import NailDataset, getRandomUP, getSUP, getNUP,sanity
+from patchSampler import NailDataset, getRandomUP, getSUP, getNUP,sanity,getUp
 
+import openslide
 import torchvision.transforms as transforms
 import torch
 import torch.nn as nn
@@ -16,7 +17,7 @@ import matplotlib.pyplot as plt
 import time
 import random
 
-from patchSampler import fullGrid
+from patchSampler import fullGrid,fullGrid_tissue
 import scipy.misc
 import torch.nn.functional as F
 import sklearn.metrics as metrics
@@ -26,7 +27,16 @@ from networks import _netD, weights_init
 import numpy as  np
 import torch.optim as optim
 from options import opt
-savePath = "resultsVali/"
+
+
+import datetime
+stamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+savePath = "resultsVali/"+ stamp + "/"
+import os
+try:
+    os.makedirs(savePath)
+except OSError:
+    pass
 
 wh = opt.imageSize  # #resizes and eventually downsamples the cropped image slice, which should be larger usually
 tbuf = [transforms.Resize(size=wh, interpolation=2),transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5))]
@@ -39,6 +49,7 @@ print ("device", device)
 ndf = opt.ndf
 netD = _netD(ndf, int(np.log2(wh)), nc=4 - 1)
 print(netD)
+netD=netD.eval()
 netD = netD.to(device)
 
 criterion = nn.BCELoss()
@@ -64,7 +75,8 @@ def validate():
                 im, lab = data
                 im = im[:, :3].to(device)  # trim alpha channel
                 lab = lab.to(device).float()
-                pred = netD(im)
+                with torch.no_grad():
+                    pred = netD(im)
 
                 for b in range(pred.shape[0]):
                     pl += [[pred[b,0,0,0].item(), lab[b].item()]]
@@ -90,7 +102,7 @@ def validate():
         top=[]#keep highest scored patches
         for prob,im in visL[:nVI]:
             top.append(im)
-        
+
         buf = torch.cat(top) * 0.5 + 0.5
         print("class examples", buf.shape, buf.max(), buf.min())
         vutils.save_image(buf, '%s/class%s_%spx_cr%s_train%s.jpg' % (savePath, l, opt.imageSize, opt.imageCrop,str(opt.VTrain)),
@@ -215,6 +227,7 @@ def visualizeEqualProb(unlabeledP, pl):
 
     print ("cumulp cumuln", cup.mean(), cun.mean(), cup.mean() - cun.mean())
 
+##very slow -- makes full patch buffer, eats RAM TODO make run online...
 def showRandomFullSlide_Heatmap():
     def save(name):
         #sanity(name)##will save thumbnail, make sure it looks ok
@@ -239,8 +252,6 @@ def showRandomFullSlide_Heatmap():
         scipy.misc.imsave("%s/heatPred_%s_px%s_cr%s.png" % (savePath,name, opt.imageSize, opt.imageCrop),1- heatmap.cpu().numpy())
         smallI=torch.cat(smallI)
         vutils.save_image(smallI, "%s/heatPatch_%s_px%s_cr%s.png" % (savePath,name, opt.imageSize, opt.imageCrop), normalize=False,nrow=N0,padding=0)
-
-
 
     i = np.random.randint(len(tdataset.testP))
     name = tdataset.testP[i]
@@ -302,54 +313,62 @@ def slideClassify(posI,negI,N=200,type="MEAN"):
     plt.xlabel('False Positive Rate')
     plt.savefig("%s/sliceAUC_%s_%spx_cr%s.png" % (savePath,type,opt.imageSize, opt.imageCrop))
     print ("AUC", roc_auc)
+    plt.close()
+
+    #https://en.wikipedia.org/wiki/F1_score
+    from sklearn.metrics import precision_recall_curve
+    precision, recall, T = precision_recall_curve(y, x)
+    f1= 2 * (precision * recall) / (precision + recall)
+    plt.plot(f1)
+    plt.plot(T)
+    plt.ylabel('F1 score')
+    #plt.xlabel('thresg')
+    plt.savefig("%s/sliceF1_%s_%spx_cr%s.png" % (savePath, type, opt.imageSize, opt.imageCrop))
+    plt.close()
 
 # #sequential slide walk
 # opt.WOS determined how many patches per slide to read
 # #TODO use parallel workers -- too slow otherwise?
 def validateSpatialGridSampling(dataset):
-    if True:#create the systemic sampling grids
-        posp = getSUP(dataset, count=opt.WOS)
-        negp = getNUP(dataset, count=opt.WOS)  # #a big slicde count ensures that the slides can be decided easily
-        print ("patch slices", len(posp), len(negp),len(posp[0]))
+    ##no need to save lists -- directly work on each slide, save predictions
+    def perfP(fname=None):
+        fname2= fname[dataset.img_pathLen:]
+        #l=getUp(openslide.open_slide(fname), dataset, opt.WOS, fname2)
+        l=fullGrid_tissue(fname, dataset.transform)
+        ans=[]
+        a=torch.cat(l)##very large list, on cpu
+        chunks=a.chunk(max(1,a.shape[0]//10))
+        print ("chunks",len(chunks))
+        print (chunks[0].shape)
+        with torch.no_grad():
+            for c in chunks:
+                c=c.to(device)
+                pred = netD(c)
+                ans.append(pred)
 
-        def perfP(l):
-            ans=[]
-            a=torch.cat(l)##very large list, on cpu
-            chunks=a.chunk(max(1,a.shape[0]//200))
-            #print ("chunks",len(chunks))
-            #print (chunks[0].shape)
-            with torch.no_grad():
-                for c in chunks:
-                    c=c.to(device)
-                    pred = netD(c)
-                    ans.append(pred)
-            return torch.cat(ans)
+        out= torch.cat(ans).cpu()
+        ix = np.argsort(out.squeeze())##save patches -10: from this list -- highest ranked
+        print (ix.shape,out.shape,out.squeeze()[ix[-10:]].shape)
+        print ("top patches",fname,out.squeeze()[ix[-10:]])
+        maxRanked=a[ix[-10:]]*0.5+0.5
+        vutils.save_image(maxRanked, '%s/maxProbPatch%s.jpg' % (savePath,fname2),normalize=False)
+        return out
+    pred_posp=[]
+    pred_negp=[]
+    ##now predict for all and keep probabilities
+    #for buf in posp:
+    for name in dataset.testP[:5]+dataset.Xpos[:5]:
+        pred=perfP(name)
+        pred_posp.append(pred)
+        print ("probs",len(pred_posp),pred.shape)
+    for name in dataset.Xneg[:5]:
+        pred=perfP(name)
+        pred_negp.append(pred)
+        print("probs", len(pred_negp), pred.shape)
 
-        pred_posp=[]
-        pred_negp=[]
-        ##now predict for all and keep probabilities
-        for buf in posp:
-            pred=perfP(buf)
-            #buf = torch.cat(buf).to(device)  # all belonging to 1 slide
-            #with torch.no_grad():
-                    #pred = netD(buf)
-            pred_posp.append(pred)
-            print ("probs",len(pred_posp),pred.shape)
-        for buf in negp:
-            pred=perfP(buf)
-            #buf = torch.cat(buf).to(device)
-            #with torch.no_grad():
-            #        pred = netD(buf)
-            pred_negp.append(pred)
-            print("probs", len(pred_negp), pred.shape)
+    posI = torch.cat(pred_posp,1).squeeze()#shape is gridpoints x count files
+    negI = torch.cat(pred_negp,1).squeeze()
 
-        posI = torch.cat(pred_posp,1).squeeze()#shape is gridpoints x count files
-        negI = torch.cat(pred_negp,1).squeeze()
-        pickle.dump((posI,tdataset.testP,negI,tdataset.Xneg),open(savePath+"slideP.dat",'wb'))
-    else:
-        posI,_,negI,_ = pickle.load(open(savePath+"slideP.dat",'rb'))
-    posI=posI.cpu()
-    negI=negI.cpu()
     slideClassify(posI,negI,100,"MEAN")
     slideClassify(posI,negI,10,"MEAN")
     slideClassify(posI, negI, 5, "MEAN")
@@ -359,7 +378,6 @@ def validateSpatialGridSampling(dataset):
     I=torch.sort(I,0,descending=True)[0]#so for each file, sorted by magnitude
     I=I[:300]##keep top patches, simpler
 
-    ##TODO better save image directly with vutils
     plt.figure(figsize=(12, 12))
     plt.imshow(I.cpu().numpy(),interpolation='none')
     plt.ylabel('sorted patches, fixed count per slide')
@@ -387,45 +405,23 @@ bufN = []
 buf=[]
 
 ##usage python validateFungi.py --imageSize=128 --imageCrop=1024 --WOS=1200
-##note: WOS determines patch density, the higher the denser
 if __name__ == '__main__':
-    from classify import savePath as loadPath
-    name='%s/model_px%s_cr%s.dat' % (loadPath, opt.imageSize, opt.imageCrop)
+    # --imageSize=256 --imageCrop=256 --ndf=64 --batchSize=40 --BN=True --loadPath='results/2019-10-08_19-41-03model_px256_cr256_BNTrue.dat'
+    name=opt.loadPath
     print ("name",name)
     netD.load_state_dict(torch.load(name))
-    #try:
-    #    showRandomFullSlide_Heatmap()
-    #except Exception as e:
-    #     print ("heatmap",e)
+    try:
+        pass
+        #showRandomFullSlide_Heatmap()
+    except Exception as e:
+         print ("heatmap",e)
     try:
         # uses proper spatial frequency, so many more blank patches than sick ones
-        if opt.WOS>200:
-            validateSpatialGridSampling(tdataset)
-        else:
-            validate()
+        # obsolete - now we call full tissue grid
+        #if opt.WOS>200:
+        validateSpatialGridSampling(tdataset)
+        validate()
     except Exception as e:
-        print ("validate",e)
+        print ("validate error",e)
 
-
-''' poorly classified pos slides
-1 /mnt/slowdata1/nagelpilz_p150/wsi/P040.tif
-2 /mnt/slowdata1/nagelpilz_p150/wsi/P041.tif
-16 /mnt/slowdata1/nagelpilz_p150/wsi/P102.tif
-24 /mnt/slowdata1/nagelpilz_p150/wsi/P110.tif
-28 /mnt/slowdata1/nagelpilz_p150/wsi/P114.tif
-31 /mnt/slowdata1/nagelpilz_p150/wsi/P117.tif
-44 /mnt/slowdata1/nagelpilz_p150/wsi/P130.tif
-55 /mnt/slowdata1/nagelpilz_p150/wsi/P141.tif
-59 /mnt/slowdata1/nagelpilz_p150/wsi/P145.tif
-61 /mnt/slowdata1/nagelpilz_p150/wsi/P147.tif
-66 /mnt/slowdata1/nagelpilz_p150/wsi/P152.tif
-70 /mnt/slowdata1/nagelpilz_p150/wsi/P156.tif
-80 /mnt/slowdata1/nagelpilz_p150/wsi/P166.tif
-85 /mnt/slowdata1/nagelpilz_p150/wsi/P171.tif
-87 /mnt/slowdata1/nagelpilz_p150/wsi/P173.tif
-88 /mnt/slowdata1/nagelpilz_p150/wsi/P174.tif
-89 /mnt/slowdata1/nagelpilz_p150/wsi/P175.tif
-96 /mnt/slowdata1/nagelpilz_p150/wsi/P182.tif
-
-'''
 

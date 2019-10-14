@@ -20,7 +20,21 @@ from networks import _netD, weights_init
 import numpy as  np
 import torch.optim as optim
 from options import opt
-savePath = "results/"
+#savePath = "results/"
+
+if opt.outf == 'results':
+    print ("reset output folder")
+    import datetime
+    stamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    opt.outf = opt.outf + "/" + stamp + "/"
+import os
+try:
+    os.makedirs(opt.outf)
+except OSError:
+    pass
+print ("outfolder " + opt.outf)
+
+savePath=opt.outf
 
 wh = opt.imageSize  # #resizes and eventually downsamples the cropped image slice, which should be larger usually
 # transforms.RandomCrop(wh),
@@ -36,15 +50,16 @@ tbuf = [transforms.Resize(size=wh, interpolation=2),transforms.RandomVerticalFli
 transform = transforms.Compose(rbuf+tbuf)
 dataset = NailDataset(transform=transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize, shuffle=True, num_workers=opt.workers, drop_last=False)  # #simpler to drop in training?
-print ("data augment train set",rbuf+tbuf)
+print ("data augment train set",transform)
 
 tbuf = [transforms.Resize(size=wh, interpolation=2),transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5))]
-transform = transforms.Compose(tbuf)
-print ("data augment test set",tbuf)
+transform = transforms.Compose([transforms.CenterCrop(wh)]+tbuf)#test set not mirrored, or rotated
+print ("data augment test set",transform)
 tdataset = NailDataset(transform=transform, train=False)#for test no random augmenting
 tdataloader = torch.utils.data.DataLoader(tdataset, batch_size=opt.batchSize, shuffle=True, num_workers=opt.workers)  # o drop here -- but random patch samplign anyway
 
 print ("med data loader length", len(dataloader))
+#raise Exception
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print ("device", device)
@@ -369,9 +384,9 @@ if __name__ == '__main__':
                 print ("iter", it, i, "training loss", err.item(), "-100 -200 lag average", a[-100:].mean(), a[-200:].mean())
                 plt.figure(figsize=(12, 12))
                 plt.subplot(3, 1,1)
-                plt.semilogy(buf,alpha=0.2)
+                plt.semilogy(buf,alpha=0.5)
                 av=np.convolve(a, np.ones((win,))/win, mode='valid')
-                plt.semilogy(av,color='r',lw=3,alpha=0.2)
+                plt.semilogy(av,color='r',lw=3,alpha=0.7)
                 plt.xlabel("ADAM step")
                 plt.ylabel("cross entropy error")
 
@@ -386,9 +401,9 @@ if __name__ == '__main__':
 
                 win=20
                 plt.subplot(3, 1, 3)
-                plt.semilogy(bufTest, lw=1, alpha=0.2)
+                plt.semilogy(bufTest, lw=1, alpha=0.5)
                 abufT = np.convolve(np.array(bufTest), np.ones((win,)) / win, mode='valid')
-                plt.semilogy(abufT, lw=3, alpha=0.2)
+                plt.semilogy(abufT, lw=3, alpha=0.7)
                 plt.xlabel("test step")
                 plt.ylabel("cross entropy error")
 

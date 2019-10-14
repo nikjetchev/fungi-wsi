@@ -4,8 +4,9 @@ import openslide
 import numpy as np
 from PIL import ImageStat
 import pickle
-
-img_path="/mnt/slowdata1/nagelpilz_p150/"
+from time import time
+from options import defaultPath
+img_path=defaultPath
 img_path+= "wsi/"
 
 def Gridratio_(s):
@@ -16,6 +17,7 @@ def Gridratio_(s):
     N1 = s.dimensions[1] // d1
 
     print ("slide size",s.dimensions,"d",d0,d1,"N",N0,N1)
+    t0=time()
 
     ##to call for each min max pair
     #if boring pink return true
@@ -26,9 +28,9 @@ def Gridratio_(s):
 
     for i in range(1,N0):
         if i%20==0:
-            print ("row",i)
+            print ("row",i,'time',time()-t0)
         for j in range(1,N1):
-            patch = centerPatch(s,i*d0,j*d1)##level will be auto found by imageCrop, imageSize
+            patch = centerPatch(s,i*d0,j*d1,level=2)##level will be auto found by imageCrop, imageSize
             ext=patch.getextrema()
 
             filt=False
@@ -37,8 +39,8 @@ def Gridratio_(s):
             elif pinkCriteria(ext[0]) and pinkCriteria(ext[1]) and pinkCriteria(ext[2]): ##check if constant values, also boring case
                 filt=True
             else:               #so potentially good, non-boring by other 2 conditions
-                #more expensive filter
-                stat = ImageStat.Stat(patch)
+                #more expensive filter -- so downsample to compensate
+                stat = ImageStat.Stat(centerPatch(s,i*d0,j*d1,level=4))
                 r, g, b,alpha = stat.mean
                 if r > 235 and g > 235 and b > 235:
                     filt=True # possible case: few tissue pixels, no tissue overall
@@ -48,7 +50,7 @@ def Gridratio_(s):
                     print(ext, " i ",i,"found",len(nonwhite))
 
     pdirty= len(nonwhite)/float(N0*N1)
-    print('')
+    print('time',time()-t0)
     print ("statistics tissue",pdirty)
     print ('')
     return nonwhite
@@ -62,6 +64,7 @@ def Gridratio(name):
 ##example usage python cacheWhite.py --imageCrop=1024 --imageSize=64
 if __name__ == "__main__":
     names = os.listdir(img_path)
+    print ("names to cache",len(names))
     d={}
     for n in names:
         res=Gridratio(n)

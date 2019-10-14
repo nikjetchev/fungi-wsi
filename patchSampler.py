@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 import torch.utils.data
 import os
 import numpy as np
-from options import opt
+from options import opt,defaultPath
 import time as time
 import random
 import pickle
@@ -44,9 +44,10 @@ def fullGrid(name,transform):
     print (s.dimensions,"full count patches",N0,N1,N0*N1)
 
     buf=[]
+    t0=time.time()
     for i in range(1, N1):##height
         if i%5==0:
-            print ("fullGrid hmap",i,"/",N1)
+            print ("fullGrid hmap",i,"/",N1,"time",time.time()-t0)
         for j in range(1, N0):##width
             patch = centerPatch(s, j * d0, i * d1)
             buf.append(transform(patch)[:3].unsqueeze(0))
@@ -90,16 +91,52 @@ def getRandomUP(dat, count=1):
     a= getUp(s, dat, count,testP[i][dat.img_pathLen:])
     s.close()
     return a
-## get some patches given that slide s, # #slide already fixed!!
-##if count>1 will use systemic spatial sampling, i.e. a grid instead of uniform prior
-#@param name is partial name already
-def getUp(s, dat, count=1,name=None):
+
+#full grid check with cache use
+##really fast - give back patches where tissue present
+def fullGrid_tissue(name, transform):
+    s = openslide.open_slide(name)
+    N0 = s.dimensions[0] //wh
+    N1 = s.dimensions[1] //wh
+    d0 = wh
+    d1 = wh
+    print (s.dimensions,"full count patches",N0,N1,N0*N1,"d",d0)
+    buf=[]
+    t0=time.time()
+    partialWSIname = name[len(defaultPath)+4:]
+    try:
+        nonwhite = archive[partialWSIname]
+        print ("arXiv present",partialWSIname,len(nonwhite))
+        if len(nonwhite) < 150:
+            print (nonwhite)
+        def check(x,y):
+            if (x - x % cacheRes, y - y % cacheRes) in nonwhite:
+                return True
+            return False
+    except:
+        print("no arXiv present", partialWSIname)
+        def check(x, y):
+            return True
+
+    for i in range(1, N1):##height
+        if i%25==0:
+            print ("fullGrid hmap",i,"/",N1,"time",time.time()-t0,"patches added",len(buf))
+        for j in range(1, N0):#width
+            if not check(j * d1,i * d0):  ##so white:
+                pass
+                #buf.append(torch.FloatTensor(torch.ones(1, 3, opt.imageSize, opt.imageSize)))
+            else:
+                patch = centerPatch(s, j * d0, i * d1)
+                buf.append(transform(patch)[:3].unsqueeze(0))
+    return buf
+
+def getUp(s, dat,count=1,name=None):
     t0 = time.time()
     a = []
     if count > 1 and True:
         N0 = int(np.sqrt(count))
         N1 = N0##set counts
-        d0= s.dimensions[0]//N0##distance btw grid points
+        d0 = s.dimensions[0] // N0##distance btw grid points
         d1 = s.dimensions[1] // N1
         #if slie is not square d0!=d1, the wholes will be irregular -- does not matter, still an estimator
 
@@ -114,19 +151,6 @@ def getUp(s, dat, count=1,name=None):
                     patch=centerPatch(s,i * d0, j * d1)
                     a.append(dat.transform(patch)[:3].unsqueeze(0))
         print("fast data", len(a), "time", time.time() - t0)
-        '''
-        OBSOLETE -- fully random uniform sampling
-        sn = SNailDataset(s, count, dat.transform)
-        dataloader = torch.utils.data.DataLoader(sn, batch_size=count, shuffle=True, num_workers=opt.workers, drop_last=False)
-        # #full batchsize, 1 step
-        for i, data in enumerate(dataloader, 0):
-            data, _ = data
-            print ("fast data", data.shape, i, "time", time.time() - t0)
-            # TODO debug how fast -- strange, fast has no benefit from workers, no gain?? 12.1s for 500 count worker3, worker1 11.9
-            for b in range(data.shape[0]):
-                a.append(data[b:b + 1, :3])
-        '''
-
         return a
 
     #so count=1, getting random unlabelled pos patch
@@ -145,7 +169,7 @@ def getUp(s, dat, count=1,name=None):
         print ("slow data", time.time() - t0)
     return a
 
-cacheRes=1024#cache was saved at this resolution
+cacheRes=512#cache was saved at this resolution
 try:
     archive=pickle.load(open("cache%d.dat" % (cacheRes), 'rb'))
     print ("got archive",len(archive))
@@ -281,7 +305,7 @@ class NailDataset(Dataset):
         train: True is train set, False is test set
     """
 
-    def __init__(self, img_path="/mnt/slowdata1/nagelpilz_p150/", transform=None, train=True):
+    def __init__(self, img_path=defaultPath, transform=None, train=True):
         self.img_path = img_path + "wsi/"
         self.img_pathLen =len(self.img_path)
         anno_path = img_path + "anno_pre/"
@@ -298,13 +322,16 @@ class NailDataset(Dataset):
             self.coords = []  # #coords for xpos
 
             self.testP = []  # names of unlabelled
+
+            self.dims_cache={}#try if storing dimensions once speeds-up code
+
             for n in names:
+                name = self.img_path + n
                 if n[0] == "N":  # #negative examples
-                    name = self.img_path + n
                     self.Xneg += [name]
+                    self.dims_cache[name] = openslide.open_slide(name).dimensions
                     continue
 
-                name = self.img_path + n
                 namea = anno_path + n[:-3] + "xml"
                 try:
                     coords = getDots(namea)
@@ -370,24 +397,41 @@ class NailDataset(Dataset):
             img = centerPatch(s, xy[0], xy[1])
         else:  # neg class
             index =random.randrange(len(self.Xneg))
-            partialN=self.Xneg[index][self.img_pathLen:]
-            s = openslide.open_slide(self.Xneg[index])
+            partialWSIname=self.Xneg[index][self.img_pathLen:]
+            #s = openslide.open_slide(self.Xneg[index])
+            dimensions=self.dims_cache[self.Xneg[index]]
+
             label = 0
+
             while True:
-                xy = randDot(s.dimensions)
-                if partialN in archive:#faster way to get this info
-                    good = checkCache(partialN, xy[0], xy[1])
+                if random.randrange(10)==0:##small chance to get other wsi, thus escape from low tissue sinks
+                    index = random.randrange(len(self.Xneg))
+                    partialWSIname = self.Xneg[index][self.img_pathLen:]
+                    #s = openslide.open_slide(self.Xneg[index])
+                    dimensions = self.dims_cache[self.Xneg[index]]
+                xy = randDot(dimensions)
+                if partialWSIname in archive:#faster way to get this info
+                    good = checkCache(partialWSIname, xy[0], xy[1])
                     if good or random.randrange(5000)==0:#either nonwhite, or a random chance to give back anyway
-                        img = centerPatch(s, xy[0], xy[1])
+                        s = openslide.open_slide(self.Xneg[index])
+                        img = centerPatch(s,xy[0], xy[1])
+                        if random.randrange(20) == 0:
+                            print("small prob. cache", index)
                         break
                 else:#long way, manual check
-                    raise Exception('slow')
-                    img = centerPatch(s, xy[0], xy[1])
-                    ps = ImageStat.Stat(img)
-                    m = np.array(ps.mean)
-                    good = m.mean() < 250
-                    if good or random.randrange(200)==0:#either nonwhite, or a random chance to give back anyway
-                        break
+                    if random.randrange(200) ==0:
+                        print ("missing cache",index)
+                        s = openslide.open_slide(self.Xneg[index])
+                        img = centerPatch(s, xy[0], xy[1])
+                        break##accept anyway, even if not in cache
+                    ##just accept if a new file missing from cache
+                    #raise Exception('slow')
+                    #img = centerPatch(s, xy[0], xy[1])
+                    #ps = ImageStat.Stat(img)
+                    #m = np.array(ps.mean)
+                    #good = m.mean() < 250
+                    #if good or random.randrange(200)==0:#either nonwhite, or a random chance to give back anyway
+                    #    break
         s.close()
 
         if self.transform is not None:
