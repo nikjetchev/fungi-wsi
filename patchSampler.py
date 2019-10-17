@@ -93,7 +93,7 @@ def getRandomUP(dat, count=1):
     return a
 
 #full grid check with cache use
-##really fast - give back patches where tissue present
+##really fast - only give back patches where tissue present
 def fullGrid_tissue(name, transform):
     s = openslide.open_slide(name)
     N0 = s.dimensions[0] //wh
@@ -101,7 +101,9 @@ def fullGrid_tissue(name, transform):
     d0 = wh
     d1 = wh
     print (s.dimensions,"full count patches",N0,N1,N0*N1,"d",d0)
-    buf=[]
+    patches=[]
+    coords=[]
+
     t0=time.time()
     partialWSIname = name[len(defaultPath)+4:]
     try:
@@ -120,15 +122,16 @@ def fullGrid_tissue(name, transform):
 
     for i in range(1, N1):##height
         if i%25==0:
-            print ("fullGrid hmap",i,"/",N1,"time",time.time()-t0,"patches added",len(buf))
+            print ("fullGrid hmap",i,"/",N1,"time",time.time()-t0,"patches added",len(patches))
         for j in range(1, N0):#width
             if not check(j * d1,i * d0):  ##so white:
                 pass
                 #buf.append(torch.FloatTensor(torch.ones(1, 3, opt.imageSize, opt.imageSize)))
             else:
                 patch = centerPatch(s, j * d0, i * d1)
-                buf.append(transform(patch)[:3].unsqueeze(0))
-    return buf
+                patches.append(transform(patch)[:3].unsqueeze(0))
+                coords.append((j * d0, i * d1))
+    return patches,coords
 
 def getUp(s, dat,count=1,name=None):
     t0 = time.time()
@@ -415,8 +418,8 @@ class NailDataset(Dataset):
                     if good or random.randrange(5000)==0:#either nonwhite, or a random chance to give back anyway
                         s = openslide.open_slide(self.Xneg[index])
                         img = centerPatch(s,xy[0], xy[1])
-                        if random.randrange(20) == 0:
-                            print("small prob. cache", index)
+                        if not good:
+                            print("small prob. random, ignote cache", index)
                         break
                 else:#long way, manual check
                     if random.randrange(200) ==0:

@@ -4,7 +4,7 @@ Created on Jul 14, 2019
 @author: nikolay
 '''
 
-from patchSampler import NailDataset, getRandomUP, getSUP, getNUP,sanity,getUp
+from patchSampler import NailDataset, getRandomUP, getSUP, getNUP, sanity, getUp
 
 import openslide
 import torchvision.transforms as transforms
@@ -26,7 +26,7 @@ import pickle
 from networks import _netD, weights_init
 import numpy as  np
 import torch.optim as optim
-from options import opt
+from options import opt,defaultPath
 
 
 import datetime
@@ -51,21 +51,17 @@ netD = _netD(ndf, int(np.log2(wh)), nc=4 - 1)
 print(netD)
 netD=netD.eval()
 netD = netD.to(device)
-
 criterion = nn.BCELoss()
 
 #statistics on test set, using same distributions as on training set
 #also saves random patches from each class
-def validate():
+#@param TEV how many dataset iterations for total error validation, more totally random patches, both slide and label
+def validatePatch(nTEV = 10):
     err = []
     pl = []  # predict and label
-
     visImg = [[], [], []]
     nVI = 15*15  # count of patches for auxilliary visualization routine
 
-    nTEV = 5  #how many dataset iterations for total error validation, more totally random patches, both slide and label
-    if opt.VTrain:
-        nTEV=2
     with torch.no_grad():
         for it in range(nTEV):
             print ("vali",it,"/",nTEV)
@@ -91,12 +87,8 @@ def validate():
     pl = np.array(pl)
     print("total err validation", np.array(err).mean(), pl.shape)
 
-    if not opt.VTrain:
-        unlabeledP = sampleUnlabeledPos(tdataset, visImg, nVI, pl)##unlabelled postiive, also fills inplace list visIMG -- index2
-        names = ["negative", "positiveLabelled", "positiveUnlabelled"]
-    else:
-        names = ["negative", "positiveLabelled"]##if VTrain only overfit statistics
-        unlabeledP =pl[:10]
+    unlabeledP = sampleUnlabeledPos(tdataset, visImg, nVI, pl)##unlabelled postiive, also fills inplace list visIMG -- index2
+    names = ["negative", "positiveLabelled", "positiveUnlabelled"]
 
     def savePList(visL,l):
         top=[]#keep highest scored patches
@@ -227,39 +219,61 @@ def visualizeEqualProb(unlabeledP, pl):
 
     print ("cumulp cumuln", cup.mean(), cun.mean(), cup.mean() - cun.mean())
 
-##very slow -- makes full patch buffer, eats RAM TODO make run online...
+
+def saveHeatmap(name):
+    from options import defaultPath
+    from patchSampler import archive,cacheRes,centerPatch
+    s = openslide.open_slide(name)
+
+    N0 = s.dimensions[0] // wh
+    N1 = s.dimensions[1] // wh
+    d0 = wh
+    d1 = wh
+    print(s.dimensions, "full count patches", N0, N1, N0 * N1)
+    t0 = time.time()
+    partialWSIname = name[len(defaultPath) + 4:]
+    try:
+        nonwhite = archive[partialWSIname]
+        print("arXiv present", partialWSIname, len(nonwhite))
+        def check(x, y):
+            if (x - x % cacheRes, y - y % cacheRes) in nonwhite:
+                return True
+            return False
+    except:
+        print("no arXiv present", partialWSIname)
+        def check(x, y):
+            return True
+
+    predictions=[]#full systemic grid predictions
+    for i in range(N1):  ##height
+        if i % 25 == 0:
+            print("fullGrid hmap", i, "/", N1, "time", time.time() - t0, "patches added", len(predictions))
+        for j in range(N0):
+            if not check(j * d1+wh//2, i * d0+wh//2):  ##so white, no tissue
+                probability = 0
+            else:
+                patch = centerPatch(s, j * d0+wh//2, i * d1+wh//2)
+                patch=transform(patch)[:3].unsqueeze(0)
+                with torch.no_grad():
+                    probability = netD(patch.to(device)).squeeze().cpu().item()
+            predictions.append(probability)
+    predictions=np.array(predictions).reshape(N1,N0)
+    print ("predictions",predictions.shape,predictions.dtype)
+    predictions=torch.FloatTensor(predictions)
+    predictions= F.upsample(predictions.unsqueeze(0).unsqueeze(0), size=(N1*8, N0*8))
+    vutils.save_image(1-predictions, "%s/heatmap_%s.png" % (savePath,partialWSIname),
+                      normalize=False, padding=0)
+    I = s.get_thumbnail((N0*8, N1*8))
+    I.save("%s/thumb_%s.png" % (savePath,partialWSIname))
+
 def showRandomFullSlide_Heatmap():
-    def save(name):
-        #sanity(name)##will save thumbnail, make sure it looks ok
-        buf,N0,N1 = fullGrid(name,tdataset.transform)
-        smallI=[]##image much resized than original slide, further factor after the imgSize/imgCrop factor
-
-        heatmap=[]
-        for i in range(N1):
-            patches=buf[i*N0:i*N0+N0]
-            patches=torch.cat(patches).to(device)
-            with torch.no_grad():
-                    pred = netD(patches)
-                    heatmap.append(pred.view(1,-1))##a row
-                    I = F.interpolate(patches, size=(patches.shape[2] // 4, patches.shape[3] // 4), mode='bilinear')##make smaller
-                    smallI.append(I.cpu())
-        name = name[len(tdataset.img_path):-4]##for save last part just
-        heatmap=torch.cat(heatmap)##size N1xN0
-
-        heatmap = F.upsample(heatmap.unsqueeze(0).unsqueeze(0), size=(I.shape[2]*N1,I.shape[3]*N0), mode='bilinear')[0, 0]
-        print ("heatmap done",heatmap.shape)
-
-        scipy.misc.imsave("%s/heatPred_%s_px%s_cr%s.png" % (savePath,name, opt.imageSize, opt.imageCrop),1- heatmap.cpu().numpy())
-        smallI=torch.cat(smallI)
-        vutils.save_image(smallI, "%s/heatPatch_%s_px%s_cr%s.png" % (savePath,name, opt.imageSize, opt.imageCrop), normalize=False,nrow=N0,padding=0)
-
     i = np.random.randint(len(tdataset.testP))
     name = tdataset.testP[i]
-    save(name)
+    saveHeatmap(name)
 
     i = np.random.randint(len(tdataset.Xneg))
     name = tdataset.Xneg[i]
-    save(name)
+    saveHeatmap(name)
 
 def slideClassify(posI,negI,N=200,type="MEAN"):
     #N=200##how many to keep
@@ -311,30 +325,31 @@ def slideClassify(posI,negI,N=200,type="MEAN"):
     plt.ylim([0, 1])
     plt.ylabel('True Positive Rate')
     plt.xlabel('False Positive Rate')
-    plt.savefig("%s/sliceAUC_%s_%spx_cr%s.png" % (savePath,type,opt.imageSize, opt.imageCrop))
+    plt.savefig("%s/slideAUC_%s_%spx_cr%s.png" % (savePath,type,opt.imageSize, opt.imageCrop))
     print ("AUC", roc_auc)
     plt.close()
 
     #https://en.wikipedia.org/wiki/F1_score
     from sklearn.metrics import precision_recall_curve
     precision, recall, T = precision_recall_curve(y, x)
+    T = np.hstack([T[:1],T])
     f1= 2 * (precision * recall) / (precision + recall)
-    plt.plot(f1)
-    plt.plot(T)
+    plt.plot(T,f1)
+    #plt.plot(T)
     plt.ylabel('F1 score')
-    #plt.xlabel('thresg')
-    plt.savefig("%s/sliceF1_%s_%spx_cr%s.png" % (savePath, type, opt.imageSize, opt.imageCrop))
+    plt.xlabel('threshold')
+    plt.savefig("%s/slideF1_%s_%spx_cr%s.png" % (savePath, type, opt.imageSize, opt.imageCrop))
     plt.close()
 
 # #sequential slide walk
 # opt.WOS determined how many patches per slide to read
 # #TODO use parallel workers -- too slow otherwise?
-def validateSpatialGridSampling(dataset):
+def validateSlide(dataset):
     ##no need to save lists -- directly work on each slide, save predictions
     def perfP(fname=None):
         fname2= fname[dataset.img_pathLen:]
         #l=getUp(openslide.open_slide(fname), dataset, opt.WOS, fname2)
-        l=fullGrid_tissue(fname, dataset.transform)
+        l,coords=fullGrid_tissue(fname, dataset.transform)
         ans=[]
         a=torch.cat(l)##very large list, on cpu
         chunks=a.chunk(max(1,a.shape[0]//10))
@@ -352,19 +367,41 @@ def validateSpatialGridSampling(dataset):
         print ("top patches",fname,out.squeeze()[ix[-10:]])
         maxRanked=a[ix[-10:]]*0.5+0.5
         vutils.save_image(maxRanked, '%s/maxProbPatch%s.jpg' % (savePath,fname2),normalize=False)
+
+        coords=np.array(coords)
+        #augment also with probabilities, so 3 columns total
+        coords=np.hstack([coords,out.view(-1,1).numpy()])
+        np.savetxt('%s/probPatch%s.csv' % (savePath,fname2), coords, delimiter=",")
         return out
     pred_posp=[]
     pred_negp=[]
     ##now predict for all and keep probabilities
     #for buf in posp:
-    for name in dataset.testP[:5]+dataset.Xpos[:5]:
+    for name in dataset.testP[:]+dataset.Xpos[:]:
         pred=perfP(name)
         pred_posp.append(pred)
         print ("probs",len(pred_posp),pred.shape)
-    for name in dataset.Xneg[:5]:
+    for name in dataset.Xneg[:]:
         pred=perfP(name)
         pred_negp.append(pred)
         print("probs", len(pred_negp), pred.shape)
+
+    M=0
+    for l in pred_posp +pred_negp:
+        M=max(M,len(l))
+    print ("maximal len",M)
+    ##fix jagged array -- fill with zeros at the end, so no effect of sorting
+    def fixJag(x,M):
+        B=x.shape[0]
+        diff=M-B
+        if diff>0:
+            x=torch.cat([x,torch.zeros(diff,1,1,1)])
+        return x
+
+    for i in range(len(pred_posp)):
+        pred_posp[i]=fixJag(pred_posp[i],M)
+    for i in range(len(pred_negp)):
+        pred_negp[i]=fixJag(pred_negp[i],M)
 
     posI = torch.cat(pred_posp,1).squeeze()#shape is gridpoints x count files
     negI = torch.cat(pred_negp,1).squeeze()
@@ -404,24 +441,36 @@ bufP = []##keep these buffers small, otherwise too large for whole training
 bufN = []
 buf=[]
 
-##usage python validateFungi.py --imageSize=128 --imageCrop=1024 --WOS=1200
+#python validateFungi.py --imageSize=256 --imageCrop=256 --ndf=64 --batchSize=5 --BN=True --loadPath='results/2019-10-08_19-41-03/model_px256_cr256_BNTrue.dat' --resizeAugment=
 if __name__ == '__main__':
-    # --imageSize=256 --imageCrop=256 --ndf=64 --batchSize=40 --BN=True --loadPath='results/2019-10-08_19-41-03model_px256_cr256_BNTrue.dat'
     name=opt.loadPath
     print ("name",name)
     netD.load_state_dict(torch.load(name))
-    try:
-        pass
-        #showRandomFullSlide_Heatmap()
-    except Exception as e:
-         print ("heatmap",e)
-    try:
-        # uses proper spatial frequency, so many more blank patches than sick ones
-        # obsolete - now we call full tissue grid
-        #if opt.WOS>200:
-        validateSpatialGridSampling(tdataset)
-        validate()
-    except Exception as e:
-        print ("validate error",e)
 
+    if False:
+        saveHeatmap(defaultPath+"wsi/N142.tif")
+        raise Exception
+    if False:
+        import cProfile
+        command = """validatePatch(1)"""
+        cProfile.runctx(command, globals(), locals(), filename="validate.profile")
+        raise Exception
 
+    if True:
+        try:
+            validateSlide(tdataset)
+        except Exception as e:
+            print ("validate error",e)
+
+    if False:
+        try:
+            validatePatch()
+        except Exception as e:
+            print ("validate error",e)
+
+    if False:
+        try:
+            for z in range(10):
+                showRandomFullSlide_Heatmap()
+        except Exception as e:
+             print ("heatmap",e)
