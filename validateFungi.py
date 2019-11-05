@@ -219,8 +219,8 @@ def visualizeEqualProb(unlabeledP, pl):
 
     print ("cumulp cumuln", cup.mean(), cun.mean(), cup.mean() - cun.mean())
 
-
-def saveHeatmap(name):
+##@param increaseRes -- allows a denser grid with overlap
+def saveHeatmap(name,increaseRes=opt.increaseRes):
     from options import defaultPath
     from patchSampler import archive,cacheRes,centerPatch
     s = openslide.open_slide(name)
@@ -229,6 +229,13 @@ def saveHeatmap(name):
     N1 = s.dimensions[1] // wh
     d0 = wh
     d1 = wh
+
+    if increaseRes >1:##add overlapping patches
+        d0=d0//increaseRes
+        d1=d1//increaseRes
+        N0 = N0*increaseRes
+        N1 = N1*increaseRes
+
     print(s.dimensions, "full count patches", N0, N1, N0 * N1)
     t0 = time.time()
     partialWSIname = name[len(defaultPath) + 4:]
@@ -260,20 +267,18 @@ def saveHeatmap(name):
     predictions=np.array(predictions).reshape(N1,N0)
     print ("predictions",predictions.shape,predictions.dtype)
     predictions=torch.FloatTensor(predictions)
-    predictions= F.upsample(predictions.unsqueeze(0).unsqueeze(0), size=(N1*8, N0*8))
+
+    Mfactor=8.0/increaseRes##image size, increase a bit the raw prediction spatial grid
+    predictions= F.upsample(predictions.unsqueeze(0).unsqueeze(0), size=(int(N1*Mfactor), int(N0*Mfactor)))
     vutils.save_image(1-predictions, "%s/heatmap_%s.png" % (savePath,partialWSIname),
                       normalize=False, padding=0)
-    I = s.get_thumbnail((N0*8, N1*8))
+    I = s.get_thumbnail((int(N0*Mfactor), int(N1*Mfactor)))
     I.save("%s/thumb_%s.png" % (savePath,partialWSIname))
 
-def showRandomFullSlide_Heatmap():
-    i = np.random.randint(len(tdataset.testP))
-    name = tdataset.testP[i]
-    saveHeatmap(name)
-
-    i = np.random.randint(len(tdataset.Xneg))
-    name = tdataset.Xneg[i]
-    saveHeatmap(name)
+def showRandomFullSlide_Heatmap(z,slideset):
+    i = z# np.random.randint(len(slideset))
+    name = slideset[i]
+    saveHeatmap(name,3)
 
 def slideClassify(posI,negI,N=200,type="MEAN"):
     #N=200##how many to keep
@@ -341,15 +346,81 @@ def slideClassify(posI,negI,N=200,type="MEAN"):
     plt.savefig("%s/slideF1_%s_%spx_cr%s.png" % (savePath, type, opt.imageSize, opt.imageCrop))
     plt.close()
 
+##inputs are 128,256,284 centers of size 256x256
+##output: coords 64,192,320, size 128
+def saveOverlap(coords,labels,fname2,annotations):
+    br=0
+    for l in labels:
+        if l == '1':
+            br+=1
+    print ("total labels 256px grid",br)
+
+    d={}
+    for i in range(coords.shape[0]):
+        x = coords[i,0]
+        y = coords[i, 1]
+        p=coords[i,2]
+        l=labels[i]
+        for dx in [-1,1]:
+            for dy in [-1,1]:
+                xy=(x+dx*64,y+64*dy)
+                if xy not in d:
+                    d[xy] = [[],0]
+
+                if l =='0':#negatives easy -- all are 0 on these slides
+                    d[xy][1]=l
+                if l == '1':  ##so in order to stay '1' all four overlapping patches need to be 1, 4 sum to 4
+                    #print ("add from",x,y,"to",xy,"oldval",d[xy][1])
+                    d[xy][1] += 1
+                d[xy][0]+= [p] ##average the 4 overlapping patches in a list
+
+    ##now see 4 nbh stats and change to 1 if required
+    for xy in d:
+        if not isinstance(d[xy][1],str):#so on positive slide, interesting
+            dist = np.sqrt(((annotations - np.array(xy)) ** 2).sum(1))
+            if dist.min() < wh / 4:##so if 256 then 64 enough for 128px patch
+                d[xy][1]='1'
+            '''if d[xy][1]>0:
+                pass
+                #print ('integer check', d[xy][1])
+            if d[xy][1]==4:
+                d[xy][1]='1'
+            else:
+                d[xy][1] = '?'''
+
+    def plotOnes(coords, labels, d):
+        plt.figure(figsize=(10,10))
+        for i in range(len(labels)):
+            l=labels[i]
+            c=coords[i]#c,l in zip(coords,labels):
+            if l =='1':
+                #print ("blue",c,l,i)
+                plt.scatter(c[0],c[1],s=50,c='b')
+
+        for xy in d:
+            if d[xy][1]=='1':
+                #print("red",xy)
+                c=xy
+                plt.scatter(c[0], c[1], s=30, c='r')
+        plt.savefig('%s/scatter_overlap%s.png'%(savePath, fname2))
+        plt.close()
+    plotOnes(coords,labels,d)
+
+    data = []
+    for xy in d:
+        data.append([str(xy[0]), str(xy[1]), '%.4f' % np.array(d[xy][0]).mean(), d[xy][1]])
+    np.savetxt('%s/probPatch_overlap128px_%s.csv' % (savePath, fname2), np.array(data), fmt='%s', delimiter=",")
+
+
 # #sequential slide walk
 # opt.WOS determined how many patches per slide to read
 # #TODO use parallel workers -- too slow otherwise?
 def validateSlide(dataset):
     ##no need to save lists -- directly work on each slide, save predictions
-    def perfP(fname=None):
+    def perfP(fname=None,annotations=None):
         fname2= fname[dataset.img_pathLen:]
         #l=getUp(openslide.open_slide(fname), dataset, opt.WOS, fname2)
-        l,coords=fullGrid_tissue(fname, dataset.transform)
+        l,coords,labels=fullGrid_tissue(fname, dataset.transform,annotations)
         ans=[]
         a=torch.cat(l)##very large list, on cpu
         chunks=a.chunk(max(1,a.shape[0]//10))
@@ -369,20 +440,32 @@ def validateSlide(dataset):
         vutils.save_image(maxRanked, '%s/maxProbPatch%s.jpg' % (savePath,fname2),normalize=False)
 
         coords=np.array(coords)
-        #augment also with probabilities, so 3 columns total
+        #augment also with probabilities, 3rd column, 4th is label
         coords=np.hstack([coords,out.view(-1,1).numpy()])
-        np.savetxt('%s/probPatch%s.csv' % (savePath,fname2), coords, delimiter=",")
+
+        if opt.increaseRes >1:
+            saveOverlap(coords,labels,fname2,annotations)
+
+        assert(coords.shape[0] == len(labels))
+        data=[]
+        for l in range(len(labels)):
+            data.append([str(coords[l,0]),str(coords[l,1]),'%.4f'%coords[l,2],labels[l]])
+        np.savetxt('%s/probPatch%s.csv' % (savePath,fname2), np.array(data), fmt='%s',delimiter=",")
         return out
     pred_posp=[]
     pred_negp=[]
     ##now predict for all and keep probabilities
-    #for buf in posp:
-    for name in dataset.testP[:]+dataset.Xpos[:]:
-        pred=perfP(name)
+
+    for name,coords in zip(dataset.Xpos,dataset.coords):
+        pred=perfP(name,coords)
+        pred_posp.append(pred)
+        print ("probs",len(pred_posp),pred.shape)
+    for name in dataset.testP[:]:
+        pred=perfP(name,[])
         pred_posp.append(pred)
         print ("probs",len(pred_posp),pred.shape)
     for name in dataset.Xneg[:]:
-        pred=perfP(name)
+        pred=perfP(name,None)
         pred_negp.append(pred)
         print("probs", len(pred_negp), pred.shape)
 
@@ -390,7 +473,7 @@ def validateSlide(dataset):
     for l in pred_posp +pred_negp:
         M=max(M,len(l))
     print ("maximal len",M)
-    ##fix jagged array -- fill with zeros at the end, so no effect of sorting
+    ##fix jagged array -- fill with zeros at the end, so no effect on sorting operation,align edges (rather than trim)
     def fixJag(x,M):
         B=x.shape[0]
         diff=M-B
@@ -470,7 +553,17 @@ if __name__ == '__main__':
 
     if False:
         try:
-            for z in range(10):
-                showRandomFullSlide_Heatmap()
+            for z in range(3):
+                showRandomFullSlide_Heatmap(z,tdataset.Xpos)
         except Exception as e:
-             print ("heatmap",e)
+             print (z,"heatmap err",e)
+        try:
+            for z in range(3):
+                showRandomFullSlide_Heatmap(z,tdataset.Xneg)
+        except Exception as e:
+             print (z,"heatmap err",e)
+        try:
+            for z in range(3):
+                showRandomFullSlide_Heatmap(z, tdataset.testP)
+        except Exception as e:
+            print(z, "heatmap err", e)

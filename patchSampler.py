@@ -94,15 +94,32 @@ def getRandomUP(dat, count=1):
 
 #full grid check with cache use
 ##really fast - only give back patches where tissue present
-def fullGrid_tissue(name, transform):
+# @param name -- slide name to open
+# @param annotations -- either a list for pos slides, or None for negative
+def fullGrid_tissue(name, transform,annotations,increaseRes=opt.increaseRes):
+    if annotations is not None:
+        print ("len annotations",len(annotations))
+        if len(annotations) >0:
+            print ("samples",annotations[:3])
+            annotations=np.array(annotations)#so 2d array
+
     s = openslide.open_slide(name)
     N0 = s.dimensions[0] //wh
     N1 = s.dimensions[1] //wh
     d0 = wh
     d1 = wh
+
+    if increaseRes >1:##add overlapping patches
+        d0=d0//increaseRes
+        d1=d1//increaseRes
+        N0 = N0*increaseRes
+        N1 = N1*increaseRes
+
     print (s.dimensions,"full count patches",N0,N1,N0*N1,"d",d0)
     patches=[]
     coords=[]
+
+    patchLabels=[]#per patch, 0,1,?
 
     t0=time.time()
     partialWSIname = name[len(defaultPath)+4:]
@@ -130,8 +147,21 @@ def fullGrid_tissue(name, transform):
             else:
                 patch = centerPatch(s, j * d0, i * d1)
                 patches.append(transform(patch)[:3].unsqueeze(0))
+                ##TODO store directly predictions, feed  c=c.to(device) pred = netD(c), chunk size 1
                 coords.append((j * d0, i * d1))
-    return patches,coords
+                if annotations is None:
+                    patchLabels.append('0')#negative
+                elif len(annotations) ==0:
+                    patchLabels.append('?')#do not know, not annotated
+                else:#so the slide is from Xpos annotated, see if THIS patch particularly is close to annotation
+                    ##dist to closest annotated file
+                    label = '?'
+                    dist = np.sqrt(((annotations - np.array([j * d0, i * d1]))**2).sum(1))
+                    if dist.min() < wh/2:
+                        label='1'
+                    patchLabels.append(label)
+
+    return patches,coords,patchLabels
 
 def getUp(s, dat,count=1,name=None):
     t0 = time.time()

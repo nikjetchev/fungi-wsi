@@ -30,7 +30,7 @@ def Gridratio_(s):
         if i%20==0:
             print ("row",i,'time',time()-t0)
         for j in range(1,N1):
-            patch = centerPatch(s,i*d0,j*d1,level=2)##level will be auto found by imageCrop, imageSize
+            patch = centerPatch(s,i*d0,j*d1,level=3)##level will be auto found by imageCrop, imageSize
             ext=patch.getextrema()
 
             filt=False

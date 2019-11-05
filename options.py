@@ -8,6 +8,8 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument('--increaseRes', type=int, default=1,help='denser grid for predict, now supported 0 and 1 for slide class, any number for save heatmap')
+
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--imageSize', type=int, default=128, help='resizes crop to that size, the height / width of the input image to network,needs to be power of 2 for full network depth')
 parser.add_argument('--imageCrop', type=int, default=1024, help="crop from slide, larger than image size")
