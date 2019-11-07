@@ -4,7 +4,7 @@ Created on Jul 14, 2019
 @author: nikolay
 '''
 
-from patchSampler import NailDataset, getRandomUP, getSUP, getNUP, sanity, getUp
+from patchSampler import NailDataset, getRandomUP, getSUP, getNUP, sanity, getUp,centerPatch
 
 import openslide
 import torchvision.transforms as transforms
@@ -420,23 +420,43 @@ def validateSlide(dataset):
     def perfP(fname=None,annotations=None):
         fname2= fname[dataset.img_pathLen:]
         #l=getUp(openslide.open_slide(fname), dataset, opt.WOS, fname2)
-        l,coords,labels=fullGrid_tissue(fname, dataset.transform,annotations)
-        ans=[]
-        a=torch.cat(l)##very large list, on cpu
-        chunks=a.chunk(max(1,a.shape[0]//10))
-        print ("chunks",len(chunks))
-        print (chunks[0].shape)
-        with torch.no_grad():
-            for c in chunks:
-                c=c.to(device)
-                pred = netD(c)
-                ans.append(pred)
+        if False:#works but eats a lot of memory, all patches
+            patchList,coords,labels=fullGrid_tissue(fname, dataset.transform,annotations)
+            ans=[]
+            a=torch.cat(patchList)##very large list, on cpu
+            chunks=a.chunk(max(1,a.shape[0]//10))
+            print ("chunks",len(chunks))
+            print (chunks[0].shape)
+            with torch.no_grad():
+                for c in chunks:
+                    c=c.to(device)
+                    pred = netD(c)
+                    ans.append(pred)
+            out= torch.cat(ans).cpu()
 
-        out= torch.cat(ans).cpu()
-        ix = np.argsort(out.squeeze())##save patches -10: from this list -- highest ranked
-        print (ix.shape,out.shape,out.squeeze()[ix[-10:]].shape)
-        print ("top patches",fname,out.squeeze()[ix[-10:]])
-        maxRanked=a[ix[-10:]]*0.5+0.5
+            ix = np.argsort(out.squeeze())  ##save patches -10: from this list -- highest ranked
+            print(ix.shape, out.shape, out.squeeze()[ix[-10:]].shape)
+            print("top patches", fname, out.squeeze()[ix[-10:]])
+            maxRanked = a[ix[-10:]] * 0.5 + 0.5
+        else:##treat each patch indepedently, more iterations but less memory
+            patchList, coords, labels = fullGrid_tissue(fname, dataset.transform, annotations,netD=netD,device=device)
+            out = torch.cat(patchList).cpu()
+            ix = np.argsort(out.squeeze())
+            print(ix.shape, out.shape, out.squeeze()[ix[-10:]].shape)
+            print("top patches probabilities", fname, out.squeeze()[ix[-10:]])
+            ##no chunks
+            maxRanked = []
+            s = openslide.open_slide(fname)
+            for z in range(10):
+                topRank = ix[-z-1]#so ix[-10:]##-10 -9 --- _-1
+                x=coords[topRank][0]#directly in slide coords
+                y = coords[topRank][1]
+                patch = centerPatch(s, x, y)#wh = opt.imageSize
+                patch = transform(patch)[:3].unsqueeze(0)
+                print (topRank,"rank for ",z,"coords",x,y,"stats",patch.mean(),patch.max(),patch.min())
+                maxRanked.append(patch)
+            maxRanked = torch.cat(maxRanked)*0.5+0.5
+
         vutils.save_image(maxRanked, '%s/maxProbPatch%s.jpg' % (savePath,fname2),normalize=False)
 
         coords=np.array(coords)

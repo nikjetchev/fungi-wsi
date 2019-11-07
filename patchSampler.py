@@ -95,8 +95,9 @@ def getRandomUP(dat, count=1):
 #full grid check with cache use
 ##really fast - only give back patches where tissue present
 # @param name -- slide name to open
-# @param annotations -- either a list for pos slides, or None for negative
-def fullGrid_tissue(name, transform,annotations,increaseRes=opt.increaseRes):
+# @param annotations -- either a list for pos slides, or None for negative; used to get label "annotated"
+# @param netD -- if given, save no patches but directly predictions
+def fullGrid_tissue(name, transform,annotations,increaseRes=opt.increaseRes,netD=None,device=None):
     if annotations is not None:
         print ("len annotations",len(annotations))
         if len(annotations) >0:
@@ -120,6 +121,9 @@ def fullGrid_tissue(name, transform,annotations,increaseRes=opt.increaseRes):
     coords=[]
 
     patchLabels=[]#per patch, 0,1,?
+
+    #if netD is not None:
+    #    predictions =  []
 
     t0=time.time()
     partialWSIname = name[len(defaultPath)+4:]
@@ -146,21 +150,30 @@ def fullGrid_tissue(name, transform,annotations,increaseRes=opt.increaseRes):
                 #buf.append(torch.FloatTensor(torch.ones(1, 3, opt.imageSize, opt.imageSize)))
             else:
                 patch = centerPatch(s, j * d0, i * d1)
-                patches.append(transform(patch)[:3].unsqueeze(0))
+                patch = transform(patch)[:3].unsqueeze(0)
+                if netD is None:
+                    patches.append(patch)
+                else:
+                    with torch.no_grad():
+                        pred = netD(patch.to(device))
+                        #if pred.sum().item()>1e-1:
+                        #    print ("pred",pred,"patch stat",patch.max(),patch.min(),"coords",j,i)
+                        patches.append(pred)
                 ##TODO store directly predictions, feed  c=c.to(device) pred = netD(c), chunk size 1
                 coords.append((j * d0, i * d1))
                 if annotations is None:
                     patchLabels.append('0')#negative
                 elif len(annotations) ==0:
                     patchLabels.append('?')#do not know, not annotated
-                else:#so the slide is from Xpos annotated, see if THIS patch particularly is close to annotation
-                    ##dist to closest annotated file
+                else:#so the slide is from Xpos annotated, see if THIS patch particularly is close to annotation; distance to closest annotated file
                     label = '?'
                     dist = np.sqrt(((annotations - np.array([j * d0, i * d1]))**2).sum(1))
                     if dist.min() < wh/2:
                         label='1'
                     patchLabels.append(label)
 
+    if netD is not None:
+        return patches, coords, patchLabels
     return patches,coords,patchLabels
 
 def getUp(s, dat,count=1,name=None):
@@ -202,7 +215,7 @@ def getUp(s, dat,count=1,name=None):
         print ("slow data", time.time() - t0)
     return a
 
-cacheRes=512#cache was saved at this resolution
+cacheRes=256#512#cache was saved at this resolution
 try:
     archive=pickle.load(open("cache%d.dat" % (cacheRes), 'rb'))
     print ("got archive",len(archive))
