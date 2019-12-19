@@ -346,6 +346,7 @@ def slideClassify(posI,negI,N=200,type="MEAN"):
     plt.savefig("%s/slideF1_%s_%spx_cr%s.png" % (savePath, type, opt.imageSize, opt.imageCrop))
     plt.close()
 
+##hard coded for overlap 128 of 256px patches
 ##inputs are 128,256,284 centers of size 256x256
 ##output: coords 64,192,320, size 128
 def saveOverlap(coords,labels,fname2,annotations):
@@ -366,27 +367,21 @@ def saveOverlap(coords,labels,fname2,annotations):
                 xy=(x+dx*64,y+64*dy)
                 if xy not in d:
                     d[xy] = [[],0]
-
                 if l =='0':#negatives easy -- all are 0 on these slides
-                    d[xy][1]=l
-                if l == '1':  ##so in order to stay '1' all four overlapping patches need to be 1, 4 sum to 4
-                    #print ("add from",x,y,"to",xy,"oldval",d[xy][1])
-                    d[xy][1] += 1
+                    d[xy][1]='0'
                 d[xy][0]+= [p] ##average the 4 overlapping patches in a list
 
-    ##now see 4 nbh stats and change to 1 if required
+    ##now see dist to annotations and change label to 1 or ?, (does not trigger if label already '0')
     for xy in d:
-        if not isinstance(d[xy][1],str):#so on positive slide, interesting
-            dist = np.sqrt(((annotations - np.array(xy)) ** 2).sum(1))
-            if dist.min() < wh / 4:##so if 256 then 64 enough for 128px patch
-                d[xy][1]='1'
-            '''if d[xy][1]>0:
-                pass
-                #print ('integer check', d[xy][1])
-            if d[xy][1]==4:
-                d[xy][1]='1'
+        if not isinstance(d[xy][1],str):#so not '0' but on positive slide, interesting case
+            if annotations is None or len(annotations) == 0:  # easy, automatically a ?
+                d[xy][1] = '?'
             else:
-                d[xy][1] = '?'''
+                dist = np.sqrt(((annotations - np.array(xy)) ** 2).sum(1))
+                if dist.min() < wh / 4:##so if 256 then 64 enough for 128px patch
+                    d[xy][1]='1'
+                else:
+                    d[xy][1] = '?'
 
     def plotOnes(coords, labels, d):
         plt.figure(figsize=(10,10))
@@ -404,12 +399,15 @@ def saveOverlap(coords,labels,fname2,annotations):
                 plt.scatter(c[0], c[1], s=30, c='r')
         plt.savefig('%s/scatter_overlap%s.png'%(savePath, fname2))
         plt.close()
-    plotOnes(coords,labels,d)
+    try:
+        plotOnes(coords,labels,d)
+    except Exception as e:
+        print (e,"plot ones debug error")
 
     data = []
     for xy in d:
         data.append([str(xy[0]), str(xy[1]), '%.4f' % np.array(d[xy][0]).mean(), d[xy][1]])
-    np.savetxt('%s/probPatch_overlap128px_%s.csv' % (savePath, fname2), np.array(data), fmt='%s', delimiter=",")
+    np.savetxt('%s/probPatch_smallerPatch%dpx_%s.csv' % (savePath,opt.imageSize/2, fname2), np.array(data), fmt='%s', delimiter=",")
 
 
 # #sequential slide walk
@@ -457,20 +455,27 @@ def validateSlide(dataset):
                 maxRanked.append(patch)
             maxRanked = torch.cat(maxRanked)*0.5+0.5
 
-        vutils.save_image(maxRanked, '%s/maxProbPatch%s.jpg' % (savePath,fname2),normalize=False)
+        overlapString = ""
+        if opt.increaseRes > 1:
+            overlapString = "_doubleGridRes"
+
+        vutils.save_image(maxRanked, '%s/maxProbPatch_%dpx%s_%s.jpg' % (savePath,opt.imageSize,overlapString,fname2),normalize=False)
 
         coords=np.array(coords)
         #augment also with probabilities, 3rd column, 4th is label
         coords=np.hstack([coords,out.view(-1,1).numpy()])
 
         if opt.increaseRes >1:
-            saveOverlap(coords,labels,fname2,annotations)
+            try:
+                saveOverlap(coords,labels,fname2,annotations)
+            except Exception as e:
+                print ("soverlap error",e)
 
         assert(coords.shape[0] == len(labels))
         data=[]
         for l in range(len(labels)):
             data.append([str(coords[l,0]),str(coords[l,1]),'%.4f'%coords[l,2],labels[l]])
-        np.savetxt('%s/probPatch%s.csv' % (savePath,fname2), np.array(data), fmt='%s',delimiter=",")
+        np.savetxt( '%s/probPatch_%dpx%s_%s.csv' % (savePath,opt.imageSize,overlapString,fname2), np.array(data), fmt='%s',delimiter=",")
         return out
     pred_posp=[]
     pred_negp=[]
@@ -481,11 +486,11 @@ def validateSlide(dataset):
         pred_posp.append(pred)
         print ("probs",len(pred_posp),pred.shape)
     for name in dataset.testP[:]:
-        pred=perfP(name,[])
+        pred=perfP(name,[])#empty annotations, but [] because it is testP
         pred_posp.append(pred)
         print ("probs",len(pred_posp),pred.shape)
     for name in dataset.Xneg[:]:
-        pred=perfP(name,None)
+        pred=perfP(name,None)#None because by definition negative has no annotations
         pred_negp.append(pred)
         print("probs", len(pred_negp), pred.shape)
 
