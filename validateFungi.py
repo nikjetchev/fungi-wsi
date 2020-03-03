@@ -282,19 +282,20 @@ def showRandomFullSlide_Heatmap(z,slideset):
 
 def slideClassify(posI,negI,N=200,type="MEAN"):
     #N=200##how many to keep
-
     posI=torch.sort(posI,0,descending=True)[0]#so for each file, sorted by magnitude
     posI=posI[:N]##keep top patches, simpler
-
     negI=torch.sort(negI,0,descending=True)[0]#so for each file, sorted by magnitude
     negI=negI[:N]##keep top patches, simpler
 
-    for i in range(posI.shape[1]):
-        v=posI[:,i].mean()
-        if v < 0.01:
-            print (i,tdataset.testP[i],v)##sanity -- why some testP slides have weak probability...
+    '''try:##TODO fix this can be buggy if posI > testP
+        for i in range(posI.shape[1]):
+            v=posI[:,i].mean()
+            if v < 0.01:
+                print (i,tdataset.testP[i],v)##sanity -- why some testP slides have weak probability..
+    except Exception as e:
+        print ("print sanity error",e)'''
 
-    print ("arrays ready",negI.shape,posI.shape)
+    print ("arrays ready in slide Class",negI.shape,posI.shape)
     if type=="MEAN":
         negI=negI.mean(0)
         posI = posI.mean(0)
@@ -346,30 +347,42 @@ def slideClassify(posI,negI,N=200,type="MEAN"):
     plt.savefig("%s/slideF1_%s_%spx_cr%s.png" % (savePath, type, opt.imageSize, opt.imageCrop))
     plt.close()
 
-##hard coded for overlap 128 of 256px patches
-##inputs are 128,256,284 centers of size 256x256
-##output: coords 64,192,320, size 128
+#for overlap 128 of 256px patches, inputs are 128,256,384 centers of size 256x256, output: coords 64,192,320, size 128
+#for overlap 64, inputs are 64,128,.192,256... centers of size 256, outpiut coords 32,96,160,224 centers. soze 64
 def saveOverlap(coords,labels,fname2,annotations):
     br=0
     for l in labels:
         if l == '1':
             br+=1
     print ("total labels 256px grid",br)
-
     d={}
+
     for i in range(coords.shape[0]):
         x = coords[i,0]
         y = coords[i, 1]
         p=coords[i,2]
         l=labels[i]
-        for dx in [-1,1]:
-            for dy in [-1,1]:
-                xy=(x+dx*64,y+64*dy)
-                if xy not in d:
-                    d[xy] = [[],0]
-                if l =='0':#negatives easy -- all are 0 on these slides
-                    d[xy][1]='0'
-                d[xy][0]+= [p] ##average the 4 overlapping patches in a list
+
+        if opt.increaseRes ==2:
+            for dx in [-1,1]:
+                for dy in [-1,1]:
+                    xy=(x+dx*64,y+64*dy)
+                    if xy not in d:
+                        d[xy] = [[],0]
+                    if l =='0':#negatives easy -- all are 0 on these slides
+                        d[xy][1]='0'
+                    d[xy][0]+= [p] ##average the 4 overlapping patches in a list
+        elif opt.increaseRes ==4:
+            for dx in [-3,-1,1,3]:
+                for dy in [-3,-1,1,3]:
+                    xy=(x+dx*32,y+32*dy)
+                    if xy not in d:
+                        d[xy] = [[],0]
+                    if l =='0':#negatives easy -- all are 0 on these slides
+                        d[xy][1]='0'
+                    d[xy][0]+= [p]#average the 4*4=16 overlapping squares in list
+        else:
+            raise Exception('unsupported increaseres')
 
     ##now see dist to annotations and change label to 1 or ?, (does not trigger if label already '0')
     for xy in d:
@@ -378,7 +391,7 @@ def saveOverlap(coords,labels,fname2,annotations):
                 d[xy][1] = '?'
             else:
                 dist = np.sqrt(((annotations - np.array(xy)) ** 2).sum(1))
-                if dist.min() < wh / 4:##so if 256 then 64 enough for 128px patch
+                if dist.min() < wh / 2*opt.increaseRes:##so if 256 then 64 enough for 128px patch
                     d[xy][1]='1'
                 else:
                     d[xy][1] = '?'
@@ -468,6 +481,7 @@ def validateSlide(dataset):
         if opt.increaseRes >1:
             try:
                 saveOverlap(coords,labels,fname2,annotations)
+                print ("grid overlap done")
             except Exception as e:
                 print ("soverlap error",e)
 
@@ -482,18 +496,35 @@ def validateSlide(dataset):
     ##now predict for all and keep probabilities
 
     for name,coords in zip(dataset.Xpos,dataset.coords):
-        pred=perfP(name,coords)
+        print ("doing",name)
+        try:
+            pred=perfP(name,coords)
+        except Exception as e:
+            print ("perfP error",e)
+            continue
         pred_posp.append(pred)
-        print ("probs",len(pred_posp),pred.shape)
+        print ("probs in posXlabelled",len(pred_posp),pred.shape)
+        #break
     for name in dataset.testP[:]:
-        pred=perfP(name,[])#empty annotations, but [] because it is testP
+        print("doing", name)
+        try:
+            pred=perfP(name,[])#empty annotations, but [] because it is testP
+        except Exception as e:
+            print ("perfP test error",e)
+            continue
         pred_posp.append(pred)
-        print ("probs",len(pred_posp),pred.shape)
+        print ("probs in posXunlabelled",len(pred_posp),pred.shape)
+        #break
     for name in dataset.Xneg[:]:
-        pred=perfP(name,None)#None because by definition negative has no annotations
+        print("doing", name)
+        try:
+            pred=perfP(name,None)#None because by definition negative has no annotations
+        except Exception as e:
+            print ("perfP neg error",e)
+            continue
         pred_negp.append(pred)
-        print("probs", len(pred_negp), pred.shape)
-
+        print("probs in negXunlabelled", len(pred_negp), pred.shape)
+        #break
     M=0
     for l in pred_posp +pred_negp:
         M=max(M,len(l))
@@ -514,10 +545,19 @@ def validateSlide(dataset):
     posI = torch.cat(pred_posp,1).squeeze()#shape is gridpoints x count files
     negI = torch.cat(pred_negp,1).squeeze()
 
-    slideClassify(posI,negI,100,"MEAN")
-    slideClassify(posI,negI,10,"MEAN")
-    slideClassify(posI, negI, 5, "MEAN")
-    slideClassify(posI, negI,type= "MAX")
+    print ("posI negI",posI.shape,negI.shape)
+    try:
+        slideClassify(posI,negI,10,"MEAN")
+    except Exception as e:
+        print("slide classify error", e)
+    try:
+        slideClassify(posI, negI, 5, "MEAN")
+    except Exception as e:
+        print("slide classify error", e)
+    try:
+        slideClassify(posI, negI,type= "MAX")
+    except Exception as e:
+        print ("slide classify error",e)
 
     I=torch.cat([posI,negI*0,negI],1)
     I=torch.sort(I,0,descending=True)[0]#so for each file, sorted by magnitude

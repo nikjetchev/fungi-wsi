@@ -219,10 +219,16 @@ cacheRes=256#512#cache was saved at this resolution
 try:
     archive=pickle.load(open("cache%d.dat" % (cacheRes), 'rb'))
     print ("got archive",len(archive))
-    print (archive.keys())
+    #for k in archive:
+    #    print (k,len(archive[k]))
+    '''  if k.find("P040")>=0:
+            print ("################",len(archive[k]))#(archive[k])
+            for s in archive[k]:
+                print (s)'''
 except Exception as e:
     print (e,"no archive")
     archive=None
+
 def checkCache(name, x, y):
     nonwhite=archive[name]
     #print (nonwhite,"check",x-x%delta,y-y%delta)
@@ -354,14 +360,15 @@ class NailDataset(Dataset):
     def __init__(self, img_path=defaultPath, transform=None, train=True):
         self.img_path = img_path + "wsi/"
         self.img_pathLen =len(self.img_path)
-        anno_path = img_path + "anno_pre/"
+        anno_path = "/mnt/slowdata1/nagelpilz_p150/annos_xml/"#img_path + "annos_xml/"#"anno_pre/"
+        #hardcode
         self.transform = transform
 
         totC = 0
         if True:  # multi worker compatible?
             names = os.listdir(self.img_path)
             print ("full image count",len(names))
-            print (names)
+            #print (names)
             names.sort()
             self.Xpos = []  # names of positive images, restrain to 50 with annotations
             self.Xneg = []  # names of negative
@@ -381,9 +388,12 @@ class NailDataset(Dataset):
                 namea = anno_path + n[:-3] + "xml"
                 try:
                     coords = getDots(namea)
+                    if coords.shape[0]<2:##if empty coordinate annotations do not add -- it bugs code!!
+                        print ("buggy file with coords",namea,coords)
+                        continue
                 except Exception as e:
                     self.testP += [name]
-                    #print (e)
+                    #print (name,e)
                     continue  # #no coords labelling, use as positive validation set
                 # s = openslide.open_slide(name)#do per patch sampled at train&inference time, very cheap
                 self.Xpos += [name]
@@ -391,6 +401,7 @@ class NailDataset(Dataset):
 
         # #TODO add labels for some items, better split train and test
         # #coords is list of arrays -- stable with memory?
+        print ("coords list of lists",len(self.coords))
 
         #print (self.Xpos)
         #print (self.Xneg)
@@ -438,9 +449,25 @@ class NailDataset(Dataset):
             index = random.randrange(len(self.Xpos))#random slide
             s = openslide.open_slide(self.Xpos[index])  # slide opening 1ms --fast enough
             coords = self.coords[index]
-            label = 1
+
             xy = randDotC(coords)#,verbose=not self.train
             img = centerPatch(s, xy[0], xy[1])
+
+            label = 1
+            if opt.PXA:
+                delta= xy-coords
+                #print ("delta.shape")
+                delta-=opt.imageSize/2##so start of patch
+                ix = (delta[:,0]>=0)*( delta[:,0] <opt.imageSize)*(delta[:,1] <opt.imageSize)*(delta[:,1] <opt.imageSize)
+                valid = delta[ix]
+
+                label = torch.zeros(1, opt.imageSize, opt.imageSize)
+                for i in range(valid.shape[0]):
+                    label[0,valid[i,0],valid[i,1]]=1
+                #first a non-performant routine
+                #if it works - a batched version or a dictionary hashed version
+                #for i in range(coords.shape[0]):
+                #    if inside(coords[i],xy):
         else:  # neg class
             index =random.randrange(len(self.Xneg))
             partialWSIname=self.Xneg[index][self.img_pathLen:]
@@ -448,6 +475,10 @@ class NailDataset(Dataset):
             dimensions=self.dims_cache[self.Xneg[index]]
 
             label = 0
+            if opt.PXA:
+                label=torch.zeros(1,opt.imageSize,opt.imageSize)
+                #label/= label.sum()#so sums to 1
+                #print ("label av",label.mean())
 
             while True:
                 if random.randrange(10)==0:##small chance to get other wsi, thus escape from low tissue sinks

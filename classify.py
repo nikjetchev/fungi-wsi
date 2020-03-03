@@ -58,7 +58,8 @@ print ("data augment test set",transform)
 tdataset = NailDataset(transform=transform, train=False)#for test no random augmenting
 tdataloader = torch.utils.data.DataLoader(tdataset, batch_size=opt.batchSize, shuffle=True, num_workers=opt.workers)  # o drop here -- but random patch samplign anyway
 
-print ("med data loader length", len(dataloader))
+print ("med data loader length, train", len(dataloader))
+print ("med data loader length, test", len(tdataloader))
 #raise Exception
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -112,6 +113,9 @@ if __name__ == '__main__':
         netD.load_state_dict(torch.load(name))
 
     for it in range(1000):
+        if it ==0:#sanity check debug
+            valiScore()
+
         print ("it",it,"len data",len(dataloader))
         np.random.seed(it)
         random.seed(it)

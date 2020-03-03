@@ -46,7 +46,7 @@ def Gridratio_(s):
                     filt=True # possible case: few tissue pixels, no tissue overall
             if not filt:#so some pixels with non-white value
                 nonwhite.add((i*d0,j*d1))
-                if len(nonwhite)%5==1:
+                if len(nonwhite)%50==1:#just print statement
                     print(ext, " i ",i,"found",len(nonwhite))
 
     pdirty= len(nonwhite)/float(N0*N1)
@@ -65,8 +65,33 @@ def Gridratio(name):
 if __name__ == "__main__":
     names = os.listdir(img_path)
     print ("names to cache",len(names))
+
+
+    try:
+        old = pickle.load(open("cache%d.dat" % (wh), 'rb'))
+        print ("old keys",len(old))
+    except Exception as e:
+        print ("exception",e)
+        old={}
+
+    #extra print procedure
+    nca = 0
+    for n in names:
+        if n in old:
+            #print("cache init", nca,"for",n)
+            nca+=1
+        else:
+            print("no init", nca, "for", n)
+    print("cache init", nca, "for", n)
+
+    nca=0
     d={}
     for n in names:
+        if n in old:
+            d[n]=old[n]
+            print ("cache",nca,len(d))
+            nca+=1
+            continue
         res=Gridratio(n)
         d[n] = res
         pickle.dump(d,open("cache%d.dat"%(wh),'wb'))

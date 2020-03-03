@@ -8,7 +8,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--increaseRes', type=int, default=1,help='denser grid for predict, now supported 0 and 1 for slide class, any number for save heatmap')
+parser.add_argument('--increaseRes', type=int, default=1,help='denser grid for predict,  0 and 1 and 2 and 4,for slide class, any number for save heatmap')
 
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--imageSize', type=int, default=256, help='resizes crop to that size, the height / width of the input image to network,needs to be power of 2 for full network depth')
@@ -40,8 +40,11 @@ parser.add_argument('--nDep', type=int, default=5, help='depth of GAN model')
 parser.add_argument('--fRec', type=float, default=0.0, help='gan reconstruct?')
 parser.add_argument('--CGAN', type=bool, default=False, help='CGAN')
 
+parser.add_argument('--PXA', type=bool, default=False, help='if True give back pixel annotation')
+
 opt = parser.parse_args()
 print(opt)
 
-defaultPath="/home/nikolay/data_ssd/nagelpilz_p150/"#hmm, same speed? very weird...
+#defaultPath="/home/nikolay/data_ssd/nagelpilz_p150/"#hmm, same speed? very weird...
+defaultPath="/mnt/slowdata1/nagelpilz_p150/"#annos_xml/
 #defaultPath="/mnt/slowdata1/nagelpilz_p150/" # 17 sec for 256px fullGrid() from patchSampler heatmap 5 rows
