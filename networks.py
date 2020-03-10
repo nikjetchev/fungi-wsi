@@ -119,3 +119,85 @@ def setNoise(noise,supressR=False):
     if nGL:
         noise[:, :nGL] = noise[:, :nGL, :1, :1].repeat(1, 1, noise.shape[2], noise.shape[3])
     return noise
+
+class _NetUskip(nn.Module):
+    # @param ncOut is output channels
+    # @param ncIn is input channels
+    # @param ngf is channels of first layer, doubled up after every stride operation, or halved after upsampling
+    # @param nDep is depth, both of decoder and of encoder
+    # @param nz is dimensionality of stochastic noise we add
+    # @param NCbot can optionally specify the bottleneck size explicitly
+    # @param bSkip turns skip connections btw encoder and decoder off
+    # @param bTanh turns nonlinearity on and off at final output
+    def __init__(self, ngf, nDep, nz=0, Ubottleneck=0, ncOut=1, ncIn=3, bSkip=True, bTanh=False):
+        super(_NetUskip, self).__init__()
+        self.nDep = nDep
+        self.eblocks = nn.ModuleList()
+        self.dblocks = nn.ModuleList()
+        self.bSkip = bSkip
+
+        if ncIn is None:
+            of = ncOut
+        else:
+            of = ncIn  ##in some cases not an RGB conditioning
+
+        MX = 512
+
+        for i in range(self.nDep):
+            layers = []
+            if i == self.nDep - 1 and Ubottleneck>0:
+                nf = Ubottleneck
+            else:
+                nf = min(MX,ngf * 2 ** i)
+            layers += [nn.Conv2d(of, nf, 5, 2, 2)]
+            if i != 0:
+                layers += [norma(nf)]
+            if i < self.nDep - 1:
+                layers += [nn.LeakyReLU(0.2, inplace=True)]
+            else:
+                layers += [nn.Tanh()]#tanh at bottleneck?
+            of = nf
+            block = nn.Sequential(*layers)
+            self.eblocks += [block]
+
+        ##first nDep layers
+        if Ubottleneck>0:
+            of = nz + Ubottleneck
+
+        for i in range(nDep):
+            layers = []
+            if i == nDep - 1:
+                nf = ncOut
+            else:
+                nf = min(MX,ngf * 2 ** (nDep - 2 - i))
+            print ("unet",of,nf)
+            if i > 0 and self.bSkip:
+                of *= 2  ##the u skip connections
+            layers += [nn.Upsample(scale_factor=2, mode='nearest')]  # nearest is default anyway
+            layers += [nn.Conv2d(of, nf, 5, 1, 2)]
+            if i == nDep - 1:
+                if bTanh:
+                    layers += [nn.Tanh()]
+            else:
+                layers += [norma(nf)]
+                layers += [nn.ReLU(True)]
+            of = nf
+            block = nn.Sequential(*layers)
+            self.dblocks += [block]
+
+    def forward(self, input1, input2=None):
+        x = input1  ##initial input
+        skips = []
+        for i in range(self.nDep):
+            x = self.eblocks[i].forward(x)
+            if i != self.nDep - 1:
+               skips += [x]
+        bottle = x
+        if input2 is not None:
+            bottle = torch.cat((x, input2), 1)  ##the det. output and the noise appended
+        x = bottle
+        for i in range(len(self.dblocks)):
+            x = self.dblocks[i].forward(x)
+            if i < self.nDep - 1 and self.bSkip:
+                x = torch.cat((x, skips[-1 - i]), 1)
+        return x-10##prior for 0

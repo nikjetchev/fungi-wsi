@@ -449,36 +449,41 @@ class NailDataset(Dataset):
             index = random.randrange(len(self.Xpos))#random slide
             s = openslide.open_slide(self.Xpos[index])  # slide opening 1ms --fast enough
             coords = self.coords[index]
-
             xy = randDotC(coords)#,verbose=not self.train
             img = centerPatch(s, xy[0], xy[1])
 
             label = 1
             if opt.PXA:
-                delta= xy-coords
-                #print ("delta.shape")
-                delta-=opt.imageSize/2##so start of patch
-                ix = (delta[:,0]>=0)*( delta[:,0] <opt.imageSize)*(delta[:,1] <opt.imageSize)*(delta[:,1] <opt.imageSize)
-                valid = delta[ix]
+                psize=opt.imageSize
+                if opt.resizeAugment:
+                    psize=2*opt.imageSize
 
-                label = torch.zeros(1, opt.imageSize, opt.imageSize)
+                #print ("psize and imgraw",psize,img.size)
+
+                delta= coords-xy+psize//2
+                #print ("coords",np.concatenate([np.arange(coords.shape[0])[:,np.newaxis],coords,delta],1))
+                #print ("delta",delta)
+                ix = (delta[:,0]>=0)*( delta[:,0] <psize)*(delta[:,1] >=0)*(delta[:,1] < psize)
+                valid = delta[ix]
+                #print ("valid",valid)
+                label = 1#torch.zeros(1,psize,psize)
                 for i in range(valid.shape[0]):
-                    label[0,valid[i,0],valid[i,1]]=1
-                #first a non-performant routine
-                #if it works - a batched version or a dictionary hashed version
-                #for i in range(coords.shape[0]):
-                #    if inside(coords[i],xy):
+                    #label[0,valid[i,1],valid[i,0]]=1
+                    xy=(int(valid[i,0]),int(valid[i,1]))
+                    gx=img.getpixel(xy)
+                    #print("gx", gx)
+                    gx2=(gx[0],gx[1],gx[3],np.uint8(0))#so POS is 1, else 255; 1-gx[3]/255.0
+                    #print ("gx2",gx2)
+                    #raise Exception
+                    img.putpixel(xy,gx2)#TODO get label instead from img alpha
         else:  # neg class
             index =random.randrange(len(self.Xneg))
             partialWSIname=self.Xneg[index][self.img_pathLen:]
             #s = openslide.open_slide(self.Xneg[index])
             dimensions=self.dims_cache[self.Xneg[index]]
-
             label = 0
-            if opt.PXA:
-                label=torch.zeros(1,opt.imageSize,opt.imageSize)
-                #label/= label.sum()#so sums to 1
-                #print ("label av",label.mean())
+            #if opt.PXA:
+            #   label=torch.zeros(1,opt.imageSize,opt.imageSize)
 
             while True:
                 if random.randrange(10)==0:##small chance to get other wsi, thus escape from low tissue sinks
@@ -510,9 +515,7 @@ class NailDataset(Dataset):
                     #if good or random.randrange(200)==0:#either nonwhite, or a random chance to give back anyway
                     #    break
         s.close()
-
         if self.transform is not None:
-            # print (img.size, img.getbands()) 256, 256) ('R', 'G', 'B', 'A')
             img = self.transform(img)
         return img, label
 

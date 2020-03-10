@@ -41,6 +41,7 @@ parser.add_argument('--fRec', type=float, default=0.0, help='gan reconstruct?')
 parser.add_argument('--CGAN', type=bool, default=False, help='CGAN')
 
 parser.add_argument('--PXA', type=bool, default=False, help='if True give back pixel annotation')
+parser.add_argument('--Ucross', type=bool, default=False, help='if True cross entropy for  segment')
 
 opt = parser.parse_args()
 print(opt)
