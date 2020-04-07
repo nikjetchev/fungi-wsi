@@ -24,7 +24,7 @@ if opt.outf == 'results':
     print ("reset output folder")
     import datetime
     stamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    opt.outf = opt.outf + "/UNET" + "_cross%s_"%(opt.Ucross)+stamp + "/"
+    opt.outf = opt.outf + "/UNET_cross%s_%s_ndep%d_ndf%d"%(opt.Ucross,stamp,opt.nDep,opt.ndf) + "/"
 import os
 try:
     os.makedirs(opt.outf)
@@ -64,7 +64,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print ("device", device)
 
 ndf = opt.ndf
-netD = nn.Sequential(_NetUskip(ndf, int(np.log2(wh))-4, ncIn=4 - 1),nn.Sigmoid())##output in 01
+netD = nn.Sequential(_NetUskip(ndf, int(np.log2(wh))*0-0*4+opt.nDep, ncIn=4 - 1),nn.Sigmoid())##output in 01
 # 99 20 0.013797604478895664 0.05623283432505559 0.04545524820001447
 netD.apply(weights_init)
 print(netD)
@@ -121,27 +121,31 @@ def valiScore():
                             bufME.append(pred[j].mean().item())
                         else:
                             bufP.append(pred[j].max().item())
-    err = np.array(err).mean()
+    erra=np.array(err)
+    err = erra.mean()
     print("total err validation",err)
     abufN = np.array(bufN)
     abufP = np.array(bufP)
     abufME = np.array(bufME)
-    print("buffers", abufN.shape, abufP.shape,abufME.shape)
+    print("buffers", abufN.shape, abufP.shape,abufME.shape,erra.shape)
     plt.figure(figsize=(12, 12))
     plt.subplot(3, 1, 1)
     plt.semilogy(buf, alpha=0.5)
     win = 50
-    av = np.convolve(err, np.ones((win,)) / win, mode='valid')
+    av = np.convolve(erra, np.ones((win,)) / win, mode='valid')
     plt.semilogy(av, color='r', lw=3, alpha=0.7)
     plt.xlabel("ADAM step")
     plt.ylabel("L2 error")
+    plt.subplot(3, 1, 2)
     win = 50  ##more averaged
     abufP = np.convolve(abufP, np.ones((win,)) / win, mode='valid')
+
+    plt.plot(abufP, color='g', lw=2, label='pos',alpha=0.8)
+    plt.plot(abufN, color='c', lw=1, label='neg', alpha=0.3)
     abufN = np.convolve(abufN, np.ones((win,)) / win, mode='valid')
-    plt.plot(abufP, color='g', lw=1, label='pos')
-    plt.plot(abufN, color='c', lw=1, label='neg')
+    plt.plot(abufN, color='c', lw=2, label='neg',alpha=0.8)
     abufME = np.convolve(abufME, np.ones((win,)) / win, mode='valid')
-    plt.plot(abufME, color='m', lw=2, label='mean')
+    plt.plot(abufME, color='m', lw=2, label='mean',alpha=0.8)
     plt.xlabel("patch sample")
     plt.ylabel("probability")
     plt.legend()
@@ -254,11 +258,12 @@ if __name__ == '__main__':
                 plt.subplot(3,1,2)
                 win = 50##more averaged
                 abufP = np.convolve(abufP, np.ones((win,)) / win, mode='valid')
+                plt.plot(abufP, color='g', lw=2, label='pos',alpha=0.8)
+                plt.plot(abufN, color='c', lw=1, label='neg',alpha=0.3)
                 abufN = np.convolve(abufN, np.ones((win,)) / win, mode='valid')
-                plt.plot(abufP, color='g', lw=1,label='pos')
-                plt.plot(abufN, color='c', lw=1,label='neg')
+                plt.plot(abufN, color='c', lw=2, label='neg',alpha=0.8)
                 abufME = np.convolve(abufME, np.ones((win,)) / win, mode='valid')
-                plt.plot(abufME, color='m', lw=2, label='mean')
+                plt.plot(abufME, color='m', lw=2, label='mean',alpha=0.8)
                 plt.xlabel("patch sample")
                 plt.ylabel("probability")
 
@@ -269,7 +274,7 @@ if __name__ == '__main__':
                     abufT = np.convolve(np.array(bufTest), np.ones((win,)) / win, mode='valid')
                     plt.semilogy(abufT, lw=3, alpha=0.7)
                     plt.xlabel("test step")
-                    plt.ylabel("cross entropy error")
+                    plt.ylabel("L2 error")
 
                 plt.legend()
                 plt.savefig("%s/loss_px%s_cr%s_BN%s.png" % (savePath, opt.imageSize, opt.imageCrop,str(opt.BN)))
@@ -285,7 +290,7 @@ if __name__ == '__main__':
 
         if it % 20 == 1:# and it >4:
             if it % 40 == 1:
-                torch.save(netD.state_dict(), '%s/Umodel_px%s_cr%s_BN%s.dat' % (savePath, opt.imageSize, opt.imageCrop,str(opt.BN)))
+                torch.save(netD.state_dict(), '%s/Umodel_px%s_cr%s_BN%s_dep%d.dat' % (savePath, opt.imageSize, opt.imageCrop,str(opt.BN),opt.nDep))
             #try:
             #    showRandomFullSlide_Heatmap()
             #except Exception as e:

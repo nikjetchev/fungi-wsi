@@ -31,6 +31,8 @@ from options import opt,defaultPath
 
 import datetime
 stamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+if opt.loadPath.find("UNET")>=0:
+    stamp= "UNET"+stamp
 savePath = "resultsVali/"+ stamp + "/"
 import os
 try:
@@ -47,10 +49,17 @@ tdataloader = torch.utils.data.DataLoader(tdataset, batch_size=opt.batchSize, sh
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print ("device", device)
 ndf = opt.ndf
-netD = _netD(ndf, int(np.log2(wh)), nc=4 - 1)
+
+if not opt.loadPath.find("UNET")>=0:##find if UNET netD = nn.Sequential(_NetUskip(ndf, int(np.log2(wh))*0-0*4+opt.nDep, ncIn=4 - 1),nn.Sigmoid())
+    netD = _netD(ndf, int(np.log2(wh)), nc=4 - 1)
+else:
+    from networks import _NetUskip
+    mPool = torch.nn.MaxPool2d(kernel_size=(opt.imageSize)).to(device)
+    netD = nn.Sequential(_NetUskip(ndf, int(np.log2(wh))*0-0*4+opt.nDep, ncIn=4 - 1),nn.Sigmoid(), mPool)
+
 print(netD)
-netD=netD.eval()
 netD = netD.to(device)
+netD = netD.eval()
 criterion = nn.BCELoss()
 
 #statistics on test set, using same distributions as on training set
@@ -457,6 +466,9 @@ def validateSlide(dataset):
             print("top patches probabilities", fname, out.squeeze()[ix[-10:]])
             ##no chunks
             maxRanked = []
+
+            outString = ""##text for values of max prob patches
+
             s = openslide.open_slide(fname)
             for z in range(10):
                 topRank = ix[-z-1]#so ix[-10:]##-10 -9 --- _-1
@@ -466,13 +478,16 @@ def validateSlide(dataset):
                 patch = transform(patch)[:3].unsqueeze(0)
                 print (topRank,"rank for ",z,"coords",x,y,"stats",patch.mean(),patch.max(),patch.min())
                 maxRanked.append(patch)
+
+                outString += "_%.3f"%(out[ix[-z-1]])
+
             maxRanked = torch.cat(maxRanked)*0.5+0.5
 
         overlapString = ""
         if opt.increaseRes > 1:
-            overlapString = "_doubleGridRes"
+            overlapString += "_grires"+str(opt.increaseRes)
 
-        vutils.save_image(maxRanked, '%s/maxProbPatch_%dpx%s_%s.jpg' % (savePath,opt.imageSize,overlapString,fname2),normalize=False)
+        vutils.save_image(maxRanked, '%s/maxProbPatch_%dpx%s_%s.jpg' % (savePath,opt.imageSize,outString+overlapString,fname2),normalize=False)
 
         coords=np.array(coords)
         #augment also with probabilities, 3rd column, 4th is label
@@ -504,6 +519,8 @@ def validateSlide(dataset):
             continue
         pred_posp.append(pred)
         print ("probs in posXlabelled",len(pred_posp),pred.shape)
+        #if opt.VTrain and len(pred_posp)>20:
+        #    break
         #break
     for name in dataset.testP[:]:
         print("doing", name)
@@ -514,6 +531,8 @@ def validateSlide(dataset):
             continue
         pred_posp.append(pred)
         print ("probs in posXunlabelled",len(pred_posp),pred.shape)
+        #if opt.VTrain and len(pred_posp)>20:
+        #    break
         #break
     for name in dataset.Xneg[:]:
         print("doing", name)
@@ -524,6 +543,8 @@ def validateSlide(dataset):
             continue
         pred_negp.append(pred)
         print("probs in negXunlabelled", len(pred_negp), pred.shape)
+        #if opt.VTrain and len(pred_negp)>20:
+        #    break
         #break
     M=0
     for l in pred_posp +pred_negp:

@@ -409,11 +409,26 @@ class NailDataset(Dataset):
 
         print ("total CPU threads", torch.get_num_threads())
 
-        Bp = len(self.Xpos) // 5 * 4  # boundary for pos
-        Bn = len(self.Xneg) // 5 * 4
+        def trim(x,large,mod=6):
+            buf2 =[]
+            for i in range(len(x)):
+                if i%mod >0:#more frequent, mod-1 times
+                    if large:
+                        buf2.append(x[i])
+                if i%mod ==0:# only once per mod interval
+                    if not large:
+                        buf2.append(x[i])
+            x.clear()
+            for v in buf2:
+                x.append(v)##filter effect
 
         ##for train and test split labeled posSlides and negSlides
         ##unlabeled posSlides always used fully for validation
+        '''
+         Bp = len(self.Xpos) // 5 * 4  # boundary for pos
+        Bn = len(self.Xneg) // 5 * 4
+
+        
         if train:
             self.Xpos = self.Xpos[:Bp]
             self.Xneg = self.Xneg[:Bn]
@@ -422,6 +437,11 @@ class NailDataset(Dataset):
             self.Xpos = self.Xpos[Bp:]
             self.Xneg = self.Xneg[Bn:]
             self.coords = self.coords[Bp:]
+        '''
+        trim(self.coords,train)
+        trim(self.Xpos,train)
+        trim(self.Xneg,train)
+
 
         self.train=train
 

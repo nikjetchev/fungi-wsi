@@ -8,6 +8,10 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument('--hardneg', type=bool, default=False,help='whether to load dict of hardneg')
+
+parser.add_argument('--NWeight', type=int, default=1, help='weight for negative class')
+
 parser.add_argument('--increaseRes', type=int, default=1,help='denser grid for predict,  0 and 1 and 2 and 4,for slide class, any number for save heatmap')
 
 parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
@@ -40,6 +44,7 @@ parser.add_argument('--nDep', type=int, default=5, help='depth of GAN model')
 parser.add_argument('--fRec', type=float, default=0.0, help='gan reconstruct?')
 parser.add_argument('--CGAN', type=bool, default=False, help='CGAN')
 
+##stuf for pixelaccurate unet
 parser.add_argument('--PXA', type=bool, default=False, help='if True give back pixel annotation')
 parser.add_argument('--Ucross', type=bool, default=False, help='if True cross entropy for  segment')
 

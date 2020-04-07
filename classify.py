@@ -53,9 +53,9 @@ dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize, shuf
 print ("data augment train set",transform)
 
 tbuf = [transforms.Resize(size=wh, interpolation=2),transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5))]
-transform = transforms.Compose([transforms.CenterCrop(wh)]+tbuf)#test set not mirrored, or rotated
-print ("data augment test set",transform)
-tdataset = NailDataset(transform=transform, train=False)#for test no random augmenting
+ttransform = transforms.Compose([transforms.CenterCrop(wh)]+tbuf)#test set not mirrored, or rotated
+print ("data augment test set",ttransform)
+tdataset = NailDataset(transform=ttransform, train=False)#for test no random augmenting
 tdataloader = torch.utils.data.DataLoader(tdataset, batch_size=opt.batchSize, shuffle=True, num_workers=opt.workers)  # o drop here -- but random patch samplign anyway
 
 print ("med data loader length, train", len(dataloader))
@@ -72,7 +72,23 @@ netD.apply(weights_init)
 print(netD)
 netD = netD.to(device)
 
-criterion = nn.BCELoss()
+if False:
+    criterion = nn.BCELoss()
+else:
+    bce=nn.BCELoss()
+    ##pred is prediction, lab is true label image
+    def criterion(pred,lab):
+        err=0
+        for b in range(pred.shape[0]):
+            #print (b,lab[b].sum())
+            if lab[b].sum()==0:#neg
+                mask = lab[b]*0+opt.NWeight#10#more weight for such errors
+            else:
+                mask=lab[b]
+            err += (mask*bce(pred[b],lab[b]))#already squeezed
+        return err/pred.shape[0]
+
+## weight criterion more!!
 
 if False:
     opti = optim.Adam(netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -105,15 +121,77 @@ bufN = []
 buf=[]#for average minibatch error, train set
 bufTest=[]#for average error, test set - -called fewer times
 
-##usage python classify.py --imageSize=128 --imageCrop=1024
+if opt.hardneg:
+    import pickle
+    hname = "resultsVali/2020-03-26_10-48-14_factor10_vtrainfull/" + "top11445.dat"
+    hn=pickle.load(open(hname,'rb'))
+    print ("hdic",len(hn))
+    br=0
+    for n in list(hn.keys()):
+        if len(hn[n]) ==0:##delete empty nslide
+            print ("empty",n)
+            del hn[n]
+            continue
+        d2=[]
+        for p, x, y in hn[n]:
+            if p >0.2:
+                d2.append((p,x,y))
+        hn[n]+=d2
+        br+=len(d2)
+    print ("add 0.2",br)
+    print("hdic", len(hn))
+    lhn=list(hn.keys())
+
+def sampleHN(N=32):
+    def getName(n):
+        i = n.find("N")
+        n = n[i:]
+        i = n.find(".tif")
+        return n[:i]
+
+    from options import defaultPath
+    path = defaultPath + "wsi/"
+
+    import openslide
+    from patchSampler import centerPatch
+
+    img=[]
+    label=[]
+
+    for i in range(N):
+        ix= np.random.randint(len(lhn))
+        n=lhn[ix]
+        name = path + getName(n)+".tif"
+        ix=np.random.randint(len(hn[n]))##probable neg patches
+        p,x,y=hn[n][ix]
+        slide = openslide.open_slide(name)
+        cp= centerPatch(slide,x,y)
+        slide.close()
+        img.append(transform(cp).to(device)[:3].unsqueeze(0))
+        label.append(torch.zeros(1).to(device).float())
+        ##TODO proportional sampler to p?
+    #print ("list",len(img),len(label))
+    img = torch.cat(img)
+    label = torch.cat(label)
+
+    return img,label
+
+def appendHN(i,l,ih,lh):
+    #print (i.shape,l.shape)
+    #print(ih.shape,lh.shape)
+    return torch.cat([i,ih]),torch.cat([l,lh])
+
+
+    ##usage python classify.py --imageSize=128 --imageCrop=1024
 if __name__ == '__main__':
-    if False:##warm start
-        name = '%s/model_px%s_cr%s.dat' % (savePath, opt.imageSize, opt.imageCrop)
+    if len(opt.loadPath) >0:##warm start
+        loadPath = opt.loadPath
+        name = "%s/model_px%s_cr%s_BN%s.dat" % (loadPath, opt.imageSize, opt.imageCrop,str(opt.BN))
         print("loading name", name)
         netD.load_state_dict(torch.load(name))
 
     for it in range(1000):
-        if it ==0:#sanity check debug
+        if it ==0 and False:#sanity check debug
             valiScore()
 
         print ("it",it,"len data",len(dataloader))
@@ -131,10 +209,16 @@ if __name__ == '__main__':
             # print (im[:, 3].mean(), im[:, 3].min(), im[:, 3].max())
             im = im[:, :3].to(device)  # trim alpha channel
 
-            if i==0 and it ==0:
-                vutils.save_image(im*0.5+0.5, "%s/debugRotate.png" % (savePath),
-                              normalize=False)
             lab = lab.to(device).float()  # not long but float...
+
+            if opt.hardneg:
+                ih,lh=sampleHN()
+                im,lab=appendHN(im,lab,ih,lh)
+                if i==0 or i ==1:
+                    print ("expanded batch",im.shape)
+
+            if i==0 and it ==0:
+                vutils.save_image(im*0.5+0.5, "%s/debugRotate.png" % (savePath),normalize=False)
 
             opti.zero_grad()
             pred = netD(im).squeeze()
