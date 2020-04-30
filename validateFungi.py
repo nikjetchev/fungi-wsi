@@ -400,7 +400,7 @@ def saveOverlap(coords,labels,fname2,annotations):
                 d[xy][1] = '?'
             else:
                 dist = np.sqrt(((annotations - np.array(xy)) ** 2).sum(1))
-                if dist.min() < wh / 2*opt.increaseRes:##so if 256 then 64 enough for 128px patch
+                if dist.min() < wh / (2.0*opt.increaseRes):##so if 256 then 64 enough for 128px patch; with larger increaseres smaller radius
                     d[xy][1]='1'
                 else:
                     d[xy][1] = '?'
@@ -428,9 +428,11 @@ def saveOverlap(coords,labels,fname2,annotations):
 
     data = []
     for xy in d:
-        data.append([str(xy[0]), str(xy[1]), '%.4f' % np.array(d[xy][0]).mean(), d[xy][1]])
-    np.savetxt('%s/probPatch_smallerPatch%dpx_%s.csv' % (savePath,opt.imageSize/2, fname2), np.array(data), fmt='%s', delimiter=",")
-
+        MEAN = np.array(d[xy][0]).sum()/(opt.increaseRes*opt.increaseRes)
+        #so increaseRes**2 is max patches in list, if added less due to non-tissue -- counted as 0 explicitly
+        #this means that borders are undervalued implicitly, but that is OK
+        data.append([str(xy[0]), str(xy[1]), '%.4f' % MEAN, d[xy][1]])
+    np.savetxt('%s/probPatch_smallerPatch%dpx_%s.csv' % (savePath,opt.imageSize//opt.increaseRes, fname2), np.array(data), fmt='%s', delimiter=",")
 
 # #sequential slide walk
 # opt.WOS determined how many patches per slide to read

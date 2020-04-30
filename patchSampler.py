@@ -390,6 +390,8 @@ class NailDataset(Dataset):
                     coords = getDots(namea)
                     if coords.shape[0]<2:##if empty coordinate annotations do not add -- it bugs code!!
                         print ("buggy file with coords",namea,coords)
+                        print ("adding to testP set")
+                        self.testP += [name]
                         continue
                 except Exception as e:
                     self.testP += [name]
@@ -438,9 +440,14 @@ class NailDataset(Dataset):
             self.Xneg = self.Xneg[Bn:]
             self.coords = self.coords[Bp:]
         '''
-        trim(self.coords,train)
-        trim(self.Xpos,train)
-        trim(self.Xneg,train)
+
+        if opt.webanno:
+            self.Xneg=[]#empty, Xpos and coords untouched
+        else:
+            trim(self.coords,train)
+            trim(self.Xpos,train)
+            trim(self.Xneg,train)
+        #self.testP untouched, always fully inside -- pos without annotation
 
 
         self.train=train
@@ -687,9 +694,11 @@ if __name__ == "__main__":
     transform = transforms.Compose(tbuf)
     dataset = NailDataset(transform=transform)
 
+    raise Exception
+
     #memoryAll(dataset)
     checkLevels(dataset)
-    raise Exception
+
 
     dataset.printStatisticsSpatialPos()
 

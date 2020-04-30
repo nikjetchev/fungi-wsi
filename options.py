@@ -8,7 +8,8 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--hardneg', type=bool, default=False,help='whether to load dict of hardneg')
+parser.add_argument('--webanno', type=bool, default=False,help='if true, erase all neg slides, keep all pos slides')
+parser.add_argument('--hardneg', type=bool, default=False,help='whether to load dict of hardneg. affects classifier training')
 
 parser.add_argument('--NWeight', type=int, default=1, help='weight for negative class')
 
